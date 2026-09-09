@@ -4,7 +4,7 @@ from pathlib import Path
 
 from coding_agent_bench.agents.base import AgentConfig, AgentConfigResult
 from coding_agent_bench.helpers.codex import codex_create_toml
-from coding_agent_bench.models.configs import Qwen_Qwen3_8_27B
+from coding_agent_bench.models.configs import Qwen_Qwen3_8_27B, Qwen_Qwen3_8_27B_FP8
 from coding_agent_bench.providers import (
     OPENROUTER_API_KEY_ENV,
     is_openrouter,
@@ -41,7 +41,7 @@ class ClaudeCodeAgentConfig(AgentConfig):
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": model_name,
         }
         agent_kwargs = None
-        if model_name == Qwen_Qwen3_8_27B.name:
+        if model_name in (Qwen_Qwen3_8_27B.name, Qwen_Qwen3_8_27B_FP8.name):
             agent_kwargs = {"reasoning_effort": "xhigh"}
         if api_key:
             # OpenRouter's Claude Code integration expects a blank
