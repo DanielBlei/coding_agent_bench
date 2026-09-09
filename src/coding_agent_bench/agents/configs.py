@@ -39,6 +39,8 @@ class ClaudeCodeAgentConfig(AgentConfig):
             "ANTHROPIC_DEFAULT_SONNET_MODEL": model_name,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": model_name,
         }
+        if model_name == "Qwen/Qwen3.8-27B":
+            agent_env["CLAUDE_CODE_EFFORT_LEVEL"] = "xhigh"
         if api_key:
             # OpenRouter's Claude Code integration expects a blank
             # ANTHROPIC_API_KEY and the key in ANTHROPIC_AUTH_TOKEN.
