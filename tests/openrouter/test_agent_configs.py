@@ -95,7 +95,7 @@ def test_claude_code_default_vllm(monkeypatch):
     assert result.agent_env["ANTHROPIC_BASE_URL"] == "http://vllm:8000"
     assert result.agent_env["ANTHROPIC_API_KEY"] == "sk-no-key-required"
     assert "ANTHROPIC_AUTH_TOKEN" not in result.agent_env
-    assert "CLAUDE_CODE_EFFORT_LEVEL" not in result.agent_env
+    assert result.agent_kwargs is None
 
 
 def test_claude_code_qwen38_uses_xhigh_effort(monkeypatch):
@@ -103,4 +103,4 @@ def test_claude_code_qwen38_uses_xhigh_effort(monkeypatch):
     result = ClaudeCodeAgentConfig().configure(
         model_name="Qwen/Qwen3.8-27B", server_url="http://vllm:8000"
     )
-    assert result.agent_env["CLAUDE_CODE_EFFORT_LEVEL"] == "xhigh"
+    assert result.agent_kwargs == {"reasoning_effort": "xhigh"}
