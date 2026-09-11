@@ -32,3 +32,28 @@ def is_stage_environment() -> bool:
     if environment not in {"prod", "stage"}:
         raise ValueError("ENVIRONMENT must be set to either 'prod' or 'stage'")
     return environment == "stage"
+
+
+def parse_envs(envs: str | None) -> dict[str, str]:
+    """Parse a comma-separated `key=value,key=value` string into a dict."""
+    if not envs:
+        return {}
+    parsed = {}
+    for pair in envs.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            raise ValueError(f"Invalid --envs entry (expected key=value): {pair!r}")
+        key, value = pair.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"Invalid --envs entry (empty key): {pair!r}")
+        parsed[key] = value
+    return parsed
+
+
+def envs_to_export_lines(envs: dict[str, str]) -> str:
+    """Format env vars as `export KEY=VALUE` lines, for display purposes only."""
+    return "\n".join(f"export {key}={shlex.quote(value)}" for key, value in envs.items())
+
