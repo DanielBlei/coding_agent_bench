@@ -1,0 +1,19 @@
+# Rendered per-task by adapter.py: the volumes list below is filled in at
+# generation time with one bind-mount per agent-visible input subpath.
+#
+# DATA_ROOT must be exported in the host environment before `harbor run` /
+# `harbor trial start` -- see datasets/itbench-lite/harbor_tasks/README.md.
+# Only the six input subpaths are mounted here, never the scenario root
+# (which also holds the answer key).
+services:
+  main:
+    build: .
+    # Local-dev only, commented out by default: uncomment if the agent needs
+    # to reach a host-local model server (e.g. Ollama, which by default binds
+    # only 127.0.0.1). Also pass --server-url http://localhost:<port>, not
+    # host.docker.internal (doesn't resolve under host networking). Undo
+    # (comment back out) before a real benchmarking run against a proper
+    # model endpoint.
+    # network_mode: host
+    volumes:
+__VOLUMES_PLACEHOLDER__

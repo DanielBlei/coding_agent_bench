@@ -1,0 +1,77 @@
+# Refer to https://harborframework.com/docs/task-format for more details.
+
+schema_version = "1.0"
+
+# =============================================================================
+# Task Section
+# Task identity, authors, keywords.
+# =============================================================================
+[task]
+# {task_id} is filled in by the adapter at render time, e.g. "scenario-1".
+name = "redhat-et/itbench-lite__{task_id}"
+
+description = "SRE root-cause-analysis: identify the entity responsible for a simulated Kubernetes incident from telemetry (alerts, metrics, k8s events/objects, otel logs/traces)."
+
+# ITBench-Lite (ibm-research/ITBench-Lite), sre domain.
+authors = [
+    { name = "IBM Research", email = "" },
+]
+
+keywords = ["sre", "root-cause-analysis", "kubernetes", "observability"]
+
+# =============================================================================
+# Metadata Section
+# =============================================================================
+[metadata]
+# Flat for every task in v1 -- user-approved, no per-scenario derivation.
+difficulty = "hard"
+category = "sre-root-cause-analysis"
+
+# =============================================================================
+# Verifier Section
+# Settings for the verification/grading process.
+# =============================================================================
+[verifier]
+# Grader just parses a small YAML file and a JSON answer file -- keep small.
+timeout_sec = 180.0
+
+# Public network throughout -- verifier isolation was dropped: it forced
+# Harbor's egress-control sidecar (activates whenever any phase policy
+# differs from "public"), which conflicts with extra_hosts on the main
+# service (needed to reach host.docker.internal for a local model server --
+# see environment/docker-compose.yaml.tmpl). The grader's logic doesn't
+# depend on network state, so isolation bought no real correctness benefit.
+network_mode = "public"
+
+# =============================================================================
+# Agent Section
+# Settings for the AI agent solving the task.
+# =============================================================================
+[agent]
+# Installed agents (e.g. `pi`) need network at container-start to
+# self-install (npm/nvm) and to reach the model server.
+network_mode = "public"
+# Large telemetry volume to sift through -- generous timeout.
+timeout_sec = 1800.0
+
+# =============================================================================
+# Environment Section
+# Docker container / resource settings.
+# =============================================================================
+[environment]
+# Maximum time (in seconds) allowed for building the Docker image.
+build_timeout_sec = 600.0
+
+# Simple, deliberately conservative first-pass limits -- not calibrated
+# against a worst-case run (no real-agent memory profiling has been done
+# yet). Sized off known data facts: per-scenario mounted input is up to
+# ~1.1GB, the single largest file is a 411MB RFC4180-quoted TSV
+# (Scenario-11's otel_traces_raw.tsv) that can balloon several-fold in
+# memory once loaded into a pandas DataFrame, and the agent image itself is
+# ~450MB (pandas/numpy + jq/mlr/rg). Without these, Harbor/Docker impose no
+# ceiling at all and a run is unconstrained by accident rather than by
+# declaration -- revisit once real multi-scenario agent runs show actual
+# peak usage.
+cpus = 2
+memory_mb = 4096
+storage_mb = 4096

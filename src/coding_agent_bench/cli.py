@@ -2,6 +2,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 from typing import Annotated, Optional
 import shlex
 
@@ -17,6 +18,8 @@ from coding_agent_bench.utils import cmd_to_string, validate_remote_skill_source
 app = typer.Typer()
 
 
+
+
 @app.command()
 def run(
     agent: Annotated[
@@ -27,7 +30,7 @@ def run(
     model_name: Annotated[str, typer.Option(help="Model name")],
     server_url: Annotated[str, typer.Option(help="Model server URL")],
     environment: Annotated[
-        str, typer.Option(help="Environment: docker or openshift")
+        str, typer.Option(help="Environment: docker, podman, or openshift")
     ] = "docker",
     job_name: Annotated[str, typer.Option(help="Name to give the job")] = "default",
     dataset_pattern: Annotated[
@@ -66,6 +69,22 @@ def run(
             help="Path or git source (org/name[@ref], URL) for skill directories. Can be used multiple times.",
         ),
     ] = None,
+    agent_timeout_multiplier: Annotated[
+        Optional[float],
+        typer.Option(help="Multiplier for the task's agent execution timeout (Harbor's --agent-timeout-multiplier)"),
+    ] = None,
+    thinking: Annotated[
+        Optional[str],
+        typer.Option(help="Agent thinking/reasoning level, e.g. off, minimal, low, medium, high, xhigh (agent-dependent; passed as --ak thinking=<value>)"),
+    ] = None,
+    envs: Annotated[
+        Optional[str],
+        typer.Option(help="Extra environment variables for the harbor process, comma-separated key=value pairs (e.g. --envs FOO=bar,BAZ=qux)"),
+    ] = None,
+    host_network: Annotated[
+        bool,
+        typer.Option(help="Give the container host networking so it can reach localhost on the host (e.g. Ollama). Docker: injects network_mode=host via compose overlay. Podman: sets PODMAN_HOST_NETWORK=1."),
+    ] = False,
     dry_run: Annotated[
         bool, typer.Option(help="Dry run mode, does not execute the job")
     ] = False,
@@ -106,6 +125,30 @@ def run(
         typer.echo("Job started successfully")
 
     else:
+        # Hint when localhost is in the URL without --host-network
+        if not host_network and environment in ("docker", "podman") and any(
+            h in server_url for h in ("localhost", "127.0.0.1")
+        ):
+            typer.echo(
+                typer.style("ℹ ", fg=typer.colors.CYAN, bold=True)
+                + typer.style("'localhost' resolves to the container, not your host. ", fg=typer.colors.YELLOW)
+                + "Consider using --host-network to reach a host-local server.",
+                err=True,
+            )
+
+        # Set up host networking per environment
+        extra_docker_compose = None
+        if host_network:
+            if environment == "docker":
+                overlay = tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".yaml", delete=False, prefix="harbor-host-network-"
+                )
+                overlay.write("services:\n  main:\n    network_mode: host\n")
+                overlay.close()
+                extra_docker_compose = overlay.name
+            elif environment == "podman":
+                extra_envs["PODMAN_HOST_NETWORK"] = "1"
+
         builder = HarborCommandBuilder()
         harbor_command, job_dir = builder.build(
             agent=agent,
@@ -122,10 +165,15 @@ def run(
             max_retries=max_retries,
             retry_include=retry_include,
             skills=skills,
+            agent_timeout_multiplier=agent_timeout_multiplier,
+            thinking=thinking,
+            extra_docker_compose=extra_docker_compose,
         )
         typer.echo(f"Job command:\n{cmd_to_string(harbor_command)}\n")
 
         if dry_run:
+            if extra_docker_compose:
+                os.unlink(extra_docker_compose)
             return
 
         proc = subprocess.Popen(harbor_command)
@@ -145,6 +193,9 @@ def run(
                     proc.kill()
                     proc.wait()
             raise SystemExit(130)
+        finally:
+            if extra_docker_compose:
+                os.unlink(extra_docker_compose)
         typer.echo(f"Job output dir: {job_dir}")
 
 

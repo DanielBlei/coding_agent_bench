@@ -1,0 +1,8 @@
+# Opt-in only -- pass explicitly via `harbor run --extra-docker-compose
+# environment/host-network-overlay.yaml.example` when the agent needs to reach a
+# host-local model server (e.g. Ollama, bound to 127.0.0.1 by default). Use
+# `localhost`, not `host.docker.internal`, under host networking. Podman: use
+# PODMAN_HOST_NETWORK=1 instead (see src/coding_agent_bench/harbor_envs/podman.py).
+services:
+  main:
+    network_mode: host

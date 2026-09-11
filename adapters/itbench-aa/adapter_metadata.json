@@ -1,0 +1,30 @@
+[
+  {
+    "adapter_name": "itbench-aa",
+    "adapter_builders": [],
+    "original_benchmark": [
+      {
+        "split": "public",
+        "size": 40,
+        "harness": null,
+        "supported_agents": null,
+        "adaptable": true,
+        "notes": "ArtificialAnalysis/ITBench-AA, sre domain, public split: 40 of 59 total scenarios released (the rest held out). Same file-tree layout/ground-truth schema as ibm-research/ITBench-Lite (Scenario-N/{alerts,metrics,*_raw.tsv,ground_truth.yaml}), built in partnership with IBM. CC-BY-4.0."
+      }
+    ],
+    "harbor_adapter": [
+      {
+        "split": "public",
+        "adapted_benchmark_size": 1,
+        "parity_benchmark_size": null,
+        "parity_sampling_rate": null,
+        "registry_benchmark_size": null,
+        "added_agents": ["oracle"],
+        "parity_matching_agents": [],
+        "parity_unmatching_agents": null,
+        "parity_costs": null,
+        "notes": "Only Scenario-1 has been downloaded/generated/verified so far (sample validation); the adapter dynamically enumerates whatever Scenario-N directories are present under sre/ (or under snapshots/sre/<version>/ as a fallback), no scenario count is hardcoded. Oracle scores reward=1.0 on the one generated task. Update adapted_benchmark_size as more of the public 40 are downloaded and generated. Answer schema is single-cause (root_cause/kind/namespace/reasoning/propagation_chain), same as adapters/itbench-lite -- see that adapter's WHATS_NEXT.md for the deferred entities[] schema migration, which is out of scope here."
+      }
+    ]
+  }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "adapter_name": "itbench-lite",
+    "adapter_builders": [],
+    "original_benchmark": [
+      {
+        "split": "test",
+        "size": 35,
+        "harness": null,
+        "supported_agents": null,
+        "adaptable": true,
+        "notes": "Full upstream ibm-research/ITBench-Lite sre-domain snapshot has 35 scenarios (Scenario-N dirs, non-contiguous numbering)."
+      }
+    ],
+    "harbor_adapter": [
+      {
+        "split": "test",
+        "adapted_benchmark_size": 35,
+        "parity_benchmark_size": null,
+        "parity_sampling_rate": null,
+        "registry_benchmark_size": null,
+        "added_agents": ["oracle"],
+        "parity_matching_agents": [],
+        "parity_unmatching_agents": null,
+        "parity_costs": null,
+        "notes": "All 35 scenarios in the upstream ibm-research/ITBench-Lite sre-domain snapshot have been generated into Harbor tasks (datasets/itbench-lite/harbor_tasks/scenario-<N>/) and the oracle scores reward=1.0 on all of them. Answer schema is single-cause (root_cause/kind/namespace/reasoning/propagation_chain); multi-independent-cause incidents and full alert-coverage scoring are out of scope -- see REVIEW_AGAINST_ITBENCH_REFERENCE.md gap #2."
+      }
+    ]
+  }
+]

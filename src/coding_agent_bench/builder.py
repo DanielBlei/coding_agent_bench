@@ -8,13 +8,18 @@ from coding_agent_bench.agents import get_agent_config
 
 
 class SupportedAgent(str, Enum):
-
     oracle = "oracle"
     claude_code = "claude-code"
     codex = "codex"
     openclaw = "openclaw"
     opencode = "opencode"
     pi = "pi"
+
+
+class Environment(str, Enum):
+    DOCKER = "docker"
+    PODMAN = "podman"
+    OPENSHIFT = "openshift"
 
 
 class HarborCommandBuilder:
@@ -35,7 +40,7 @@ class HarborCommandBuilder:
         agent: str,
         dataset: str,
         model: str,
-        environment: Literal["docker", "openshift"],
+        environment: Environment,
         mounts: list[dict[str, str]] = None,
         n_concurrent: int | None = 1,
         agent_env: dict[str, Any] = None,
@@ -47,6 +52,9 @@ class HarborCommandBuilder:
         max_retries: int = None,
         retry_include: list[str] = None,
         skills: list[str] = None,
+        agent_timeout_multiplier: float = None,
+        thinking: str = None,
+        extra_docker_compose: str = None,
         **kwargs,
     ) -> list[str]:
         """Construct the Harbor CLI arguments for a configured benchmark run."""
@@ -93,6 +101,11 @@ class HarborCommandBuilder:
                 "--ek",
                 f"persistent_env={json.dumps({'HARBOR_PARENT': harbor_parent})}",
             ]
+        if environment == Environment.PODMAN:
+            # custom implementation uses raw podman CLI instead of podman compose
+            args += ["--environment-import-path", "coding_agent_bench.helpers.podman:PodmanEnvironment"]
+        else:
+            args += ["--env", environment]
 
         # Add mounts
         if mounts is not None:
@@ -122,6 +135,17 @@ class HarborCommandBuilder:
         for exc in includes:
             args += ["--retry-include", exc]
 
+        # Add agent execution timeout multiplier
+        if agent_timeout_multiplier is not None:
+            args += ["--agent-timeout-multiplier", str(agent_timeout_multiplier)]
+
+        # Add agent thinking/reasoning level (agent-dependent kwarg, e.g. pi's --thinking)
+        if thinking is not None:
+            args += ["--ak", f"thinking={thinking}"]
+
+        if extra_docker_compose is not None:
+            args += ["--extra-docker-compose", extra_docker_compose]
+
         # Execute the job
         cmd = ["harbor", "run", "--debug", *args]
 
@@ -133,7 +157,7 @@ class HarborCommandBuilder:
         dataset: str,
         model_name: str,
         server_url: str,
-        environment: Literal["docker", "openshift"],
+        environment: Environment,
         dataset_pattern: str = None,
         n_concurrent: int | None = 1,
         n_tasks: int = None,
@@ -143,6 +167,9 @@ class HarborCommandBuilder:
         max_retries: int = None,
         retry_include: list[str] = None,
         skills: list[str] = None,
+        agent_timeout_multiplier: float = None,
+        thinking: str = None,
+        extra_docker_compose: str = None,
         **kwargs,
     ) -> tuple[list[str], Path]:
         """
@@ -152,7 +179,7 @@ class HarborCommandBuilder:
             list[str]: Constructed command for the job.
             Path: Path to the job output directory.
         """
-        if environment not in ["docker", "openshift"]:
+        if environment not in Environment:
             raise ValueError(f"Invalid environment: {environment}")
 
         if model_max_len is None:
@@ -187,6 +214,9 @@ class HarborCommandBuilder:
             max_retries=max_retries,
             retry_include=retry_include,
             skills=skills,
+            agent_timeout_multiplier=agent_timeout_multiplier,
+            thinking=thinking,
+            extra_docker_compose=extra_docker_compose,
         )
 
         job_path = self.jobs_dir / job_name
