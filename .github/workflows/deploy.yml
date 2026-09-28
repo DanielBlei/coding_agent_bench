@@ -1,0 +1,55 @@
+name: Deploy to OpenShift
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - STAGE
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+      || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'pull_request' && 'stage' || 'production' }}
+    env:
+      NAMESPACE: ${{ github.event_name == 'pull_request' && vars.STAGE_NAMESPACE || vars.PROD_NAMESPACE }}
+      OPENSHIFT_SERVER: ${{ secrets.OPENSHIFT_SERVER }}
+      OPENSHIFT_TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to OpenShift
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ env.OPENSHIFT_SERVER }}
+          openshift_token: ${{ env.OPENSHIFT_TOKEN }}
+          namespace: ${{ env.NAMESPACE }}
+
+      - name: Verify application Secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -n "$NAMESPACE"
+          for secret in job-queue-secret nebius-secret intake-poller-secret intake-poller-google-sa; do
+            oc -n "$NAMESPACE" get secret "$secret" >/dev/null
+          done
+
+      - name: Apply job queue
+        run: oc apply -k deploy/job-queue -n "$NAMESPACE"
+
+      - name: Wait for job queue rollout
+        run: oc rollout status deployment/job-queue -n "$NAMESPACE" --timeout=10m
+
+      - name: Apply intake poller
+        run: oc apply -k deploy/intake-poller -n "$NAMESPACE"
