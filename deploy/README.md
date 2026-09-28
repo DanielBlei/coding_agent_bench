@@ -179,14 +179,19 @@ development.
 | `JOB_QUEUE_URL` | HTTPS URL for the queue API. Use the cluster's TLS/mTLS endpoint; the poller fails closed instead of using plaintext HTTP. |
 | `SENDER_EMAIL` | Address notification emails are sent from. Set it to `ace-model-evals@redhat.com`. |
 | `AUTO_APPROVE` | `"true"` to auto-submit rows with a blank status, otherwise `"false"` |
+| `SMTP_HOST` | Host for the SMTP server to send notifications through |
+| `SMTP_PORT` | Port for the SMTP server to send notifications through |
+| `SMTP_STARTTLS` | Set to `"true"` when the server requires STARTTLS, otherwise `"false"` |
+| `ALLOW_INSECURE_QUEUE_HTTP` | Set to `"true"` when the queue is served over HTTP (e.g. locally), otherwise `"false"` |
+| `service-account.json` | Content of a GCP service account that has read access to the Google Sheet. |
 
 ### Queue TLS
 
-`deploy/job-queue-service.yml` enables OpenShift's service-serving certificate
+`deploy/job-queue/deployment.yaml` enables OpenShift's service-serving certificate
 operator with the `service.beta.openshift.io/serving-cert-secret-name`
 annotation. The operator creates `job-queue-tls` with `tls.crt`, `tls.key`, and
 the service CA; the queue mounts that Secret and Uvicorn serves HTTPS on port
-8443. The Service exposes it as port 443 and the Route uses `reencrypt`
+1.    The Service exposes it as port 443 and the Route uses `reencrypt`
 termination, keeping router-to-pod traffic encrypted as well. Apply the
 manifest before starting the poller and wait for `job-queue-tls` to be created.
 
@@ -198,21 +203,6 @@ For managed Nebius capacity, an approver can set `SERVER_URL` to an explicit
 resource token such as `nebius-h200` (or `nebius-b200x8`). The queue service
 validates that token, provisions the instance, and supplies its endpoint after
 approval; the requester never needs to know that endpoint.
-
-**`intake-poller-google-sa`** — the Google service-account credential mounted
-at `/etc/google/service-account.json` for Sheets access. Notification email is
-sent through the internal SMTP relay, so no Gmail mailbox credential or
-domain-wide delegation is required.
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: intake-poller-google-sa
-type: Opaque
-stringData:
-  service-account.json: <sa-file-content>
-```
 
 The CronJob sends notifications through `smtp.corp.redhat.com` on port 25.
 Set `SMTP_HOST` and `SMTP_PORT` on the poller when a different internal relay

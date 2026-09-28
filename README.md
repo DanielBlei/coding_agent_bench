@@ -25,6 +25,7 @@ Reproducible benchmarks for coding agents and models using Harbor
   - [Set up the service](#set-up-the-service)
   - [Use the service](#use-the-service)
   - [(Optional) Connect to Nebius](#optional-connect-to-nebius)
+  - [(Optional) Set Up the Intake Poller](#optional-set-up-the-intake-poller)
 - [Harbor Command Examples](#harbor-command-examples)
   - [Claude Code vLLM](#claude-code-vllm)
   - [Codex vLLM](#codex-vllm)
@@ -207,91 +208,39 @@ sequenceDiagram
 
 ### Set up the service
 
-1. Log in to your cluster and project:
+1. Log in to your cluster:
+
     ```sh
     oc login --server=<server> --token=<token>
-    oc project <project>
     ```
-2. Create the MinIO service for artifact storage:
+
+2. Copy and fill in the Secret templates locally. Do not commit the resulting files:
+
     ```sh
-    oc apply -f deploy/harbor-minio.yml
+    cp deploy/job-queue/secret.example.yaml deploy/job-queue/secret.yaml
+    cp deploy/job-queue/nebius-secret.example.yaml deploy/job-queue/nebius-secret.yaml
     ```
-    Note: the default username and password are `(minioadmin, minioadmin)`.
-    You can update this in the deployment file if needed.
-3. Create the orchestrator and task service accounts:
+
+    If you are not using Nebius, you still need to create the secret, but you can leave the default values and they will be ignored.
+
+3. Deploy the MinIO service to store job artifacts:
+
     ```sh
-    oc apply -f deploy/harbor-orchestrator-sa.yml
-    oc apply -f deploy/harbor-task-sa.yml
+    oc apply -k deploy/minio -n <project>
     ```
-4. Create a secret file named `job-queue-secret` with the queue service's
-   `API_KEY` and any queue or Nebius settings, then apply it:
-    ```yaml
-    apiVersion: v1
-    kind: Secret
-    metadata:
-      name:  job-queue-secret
-    stringData:
-      API_KEY: <your-api-key>
-    type: Opaque
-    ```
-   If the intake CronJob is deployed, create its separate poller secret:
-   ```yaml
-   apiVersion: v1
-   kind: Secret
-   metadata:
-     name: intake-poller-secret
-   stringData:
-     JOB_QUEUE_URL: https://<queue-route-host>
-     GOOGLE_SHEET_ID: <sheet-id>
-     SENDER_EMAIL: ace-model-evals@redhat.com
-     AUTO_APPROVE: 'false'
-   type: Opaque
-   ```
-5. Create the queue service:
+
+4. Deploy the Job Queue service:
+
     ```sh
-    oc apply -f deploy/job-queue-service.yml
+    oc apply -k deploy/job-queue -n <project>
     ```
-6. (Optional) To run jobs against OpenRouter (`server_url: openrouter`), create
-   an `openrouter-api-key` secret. Job pods mount it automatically (it is
-   optional, so non-OpenRouter jobs are unaffected):
-    ```yaml
-    apiVersion: v1
-    kind: Secret
-    metadata:
-      name: openrouter-api-key
-    stringData:
-      OPENROUTER_API_KEY: <your-openrouter-api-key>
-    type: Opaque
-    ```
-    The queue service itself also needs `OPENROUTER_API_KEY` in its environment
-    to validate OpenRouter jobs at request time. Add it to `job-queue-secret`
-    (which the service already loads) or `envFrom` the `openrouter-api-key`
-    secret in `deploy/job-queue-service.yml`.
 
-    The queue listens on HTTPS inside the cluster. OpenShift's service-serving
-    certificate operator creates the `job-queue-tls` Secret referenced by the
-    Deployment, and the Route uses re-encryption so traffic remains encrypted
-    from the router to the queue pod. Wait for that Secret to appear before
-    troubleshooting pod startup:
+5. Get the route for the deployed API service:
+
     ```sh
-    oc get secret job-queue-tls
+    export JOB_QUEUE_URL="https://$(oc get route job-queue-route -n <project> --output jsonpath='{.spec.host}')"
+    open $JOB_QUEUE_URL/docs
     ```
-
-Get the route for the deployed service:
-
-```sh
-oc get route job-queue-route --output jsonpath='{.spec.host}'
-```
-
-Set `JOB_QUEUE_URL` in `intake-poller-secret` to this HTTPS route before
-applying `deploy/intake-cronjob.yml`.
-
-Check that the application is live by visiting the docs:
-
-```sh
-export JOB_QUEUE_URL="https://$(oc get route job-queue-route --output jsonpath='{.spec.host}')"
-open $JOB_QUEUE_URL/docs
-```
 
 ### Use the service
 
@@ -355,29 +304,49 @@ nebius iam auth-public-key generate \
   --output ~/.nebius/$SA_ID-credentials.json
 ```
 
-Once the service account is created, you can update your job queue secret with the following environment variables needed for Nebius:
+Once the service account is created, you can copy and fill in the values in [`deploy/job-queue/nebius-secret.example.yaml`](./deploy/job-queue/nebius-secret.example.yaml):
+
+```sh
+cp deploy/job-queue/nebius-secret.example.yaml deploy/job-queue/nebius-secret.yaml
+```
 
 ```yaml
-apiVersion: v1
 kind: Secret
 metadata:
-  name:  job-queue-secret
+  name: nebius-secret
+type: Opaque
 stringData:
-  API_KEY: <your-api-key>
-  NEBIUS_ENABLED: '1'
+  NEBIUS_ENABLED: "1"
   NEBIUS_SERVICE_ACCOUNT_CREDS: |
     <service-account-file-content>
-  NEBIUS_PARENT_ID: <project-id>
-  NEBIUS_TENANT_ID: <tenant-id>
-  NEBIUS_SERVICE_ACCOUNT_ID: <service-account-id>
-  NEBIUS_SUBNET_ID: <subnet-id>
+  NEBIUS_USER: <nebius-user>
+  NEBIUS_PARENT_ID: <nebius-parent-id>
+  NEBIUS_TENANT_ID: <nebius-tenant-id>
+  NEBIUS_SERVICE_ACCOUNT_ID: <nebius-service-account-id>
+  NEBIUS_SUBNET_ID: <nebius-subnet-id>
   NEBIUS_INSTANCE_NAME_PREFIX: job-queue-worker
-  NEBIUS_IDLE_TIMEOUT_SECONDS: '600'
-  HF_TOKEN: <optional-huggingface-token>
-type: Opaque
+  NEBIUS_IDLE_TIMEOUT_SECONDS: "600"
+  HF_TOKEN: <hugging-face-token>
 ```
 
 When creating a job, set `server_url` to `nebius-<resource>` to use a managed Nebius instance with the specified GPU resource (e.g. `nebius-h200`, `nebius-b200`). Available resources are defined in `RESOURCE_CONFIG_REGISTRY`.
+
+### (Optional) Set Up the Intake Poller
+
+The intake poller is an optional CronJob to pull requests from a Google Sheet and submit them to the job queue.
+You can read more about this service in the [intake poller docs](./deploy/README.md#intake-poller).
+
+First, copy the secret in [`deploy/intake-poller/secret.example.yaml`](./deploy/intake-poller/secret.example.yaml) and fill in the values according to the [intake poller docs](./deploy/README.md#intake-poller). Do not commit this file.
+
+```sh
+cp deploy/intake-poller/secret.example.yaml deploy/intake-poller/secret.yaml 
+```
+
+Then create the CronJob:
+
+```sh
+oc apply -k deploy/intake-poller -n <project>
+```
 
 ## Harbor Command Examples
 
@@ -673,7 +642,7 @@ oc project <project>
 Create ServiceAccounts and RoleBindings to run tasks:
 
 ```bash
-oc apply -f deploy/harbor-task-sa.yml
+oc apply -f deploy/job-queue/harbor-task-sa.yml
 ```
 
 Then in your `harbor` command, add the flag:
@@ -694,14 +663,14 @@ oc project <project>
 Create ServiceAccounts and RoleBindings to run tasks and orchestrate:
 
 ```bash
-oc apply -f deploy/harbor-task-sa.yml
-oc apply -f deploy/harbor-orchestrator-sa.yml
+oc apply -f deploy/job-queue/task-sa.yml
+oc apply -f deploy/job-queue/orchestrator-sa.yml
 ```
 
 Create a MinIO deployment to store your job results:
 
 ```bash
-oc apply -f deploy/harbor-minio.yml
+oc apply -k deploy/minio
 ```
 
 Using the CLI, start a job with the `--remote` flag enabled and set `--environment openshift`, e.g.:
