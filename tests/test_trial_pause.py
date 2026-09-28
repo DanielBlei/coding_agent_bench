@@ -7,6 +7,7 @@ import json
 import pytest
 
 from coding_agent_bench.preemption import CANCELLED_ERROR_TYPE, PAUSE_PLUGIN, PauseOnRequestPlugin
+from coding_agent_bench.resume import is_job_complete
 
 
 @pytest.fixture
@@ -122,6 +123,7 @@ def test_pending_trials_cancel_without_starting_and_native_resume_selects_them(h
     assert created == ["done", "running"]
     assert len(result.trial_results) == 4
     assert result.stats.n_cancelled_trials == 3
+    assert not is_job_complete(harbor_job.job_dir)
     assert sum(r.exception_info is None for r in result.trial_results) == 1
     cancelled = [r for r in result.trial_results if r.exception_info]
     assert {r.exception_info.exception_type for r in cancelled} == {CANCELLED_ERROR_TYPE}
@@ -161,6 +163,7 @@ def test_pending_trials_cancel_without_starting_and_native_resume_selects_them(h
         job_plugin=[PAUSE_PLUGIN],
     )
     assert set(created) == {"running", "pending-a", "pending-b"}
+    assert is_job_complete(harbor_job.job_dir)
     after = (harbor_job.job_dir / finished.trial_name / "result.json").read_bytes()
     if prepare_metadata:
         old, new = json.loads(completed_bytes), json.loads(after)

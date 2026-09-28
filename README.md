@@ -332,6 +332,19 @@ Cancel a running or queued job:
 curl -X DELETE $JOB_QUEUE_URL/jobs/<job_id> -H "X-API-Key: <your-api-key>"
 ```
 
+#### Resume snapshots in MinIO
+
+Resumed jobs keep recovery snapshots under
+`s3://results-staging/<original-job-name>/<attempt>/` before syncing updated
+artifacts to `s3://results/<original-job-name>/`.
+
+After a successful resume and sync, all staging attempts for that job are removed
+only when Harbor reports every trial completed, with no pending, running,
+cancelled, or errored trials, and the current pod has no pause request. Paused,
+failed, or incompletely synced runs retain their snapshots. A cleanup failure is
+logged without failing the completed benchmark. Legacy job names containing `/`
+retain snapshots to avoid deleting another job's nested prefix.
+
 ### (Optional) Connect to Nebius
 
 The queue service supports starting and stopping vLLM server instances automatically using [Nebius](https://nebius.com/).

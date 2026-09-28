@@ -2199,6 +2199,22 @@ def _build_resume_shell_command(
     if server_url and _parse_nebius_url(server_url) is None and not is_openrouter(server_url):
         url_replace_step = _build_url_replace_shell_step(server_url, py_job_dir)
 
+    cleanup_step = ""
+    # Flat job names have disjoint prefixes. Avoid deleting nested jobs' backups
+    # for legacy names containing '/', or the bucket itself for an empty name.
+    if original_job_name and "/" not in original_job_name:
+        completion_check = shlex.join([
+            "uv", "run", "--no-sync", "--no-cache", "python", "-m",
+            "coding_agent_bench.resume", "complete", py_job_dir,
+        ])
+        staging_job_uri = shlex.quote(f"s3://results-staging/{original_job_name}/")
+        cleanup_step = (
+            f' if [ "$harbor_rc" -eq 0 ] && {completion_check}; then'
+            f" {aws} s3 rm --recursive {staging_job_uri}"
+            " || printf 'Staging cleanup failed; canonical results are synced.\\n' >&2;"
+            " fi;"
+        )
+
     return (
         "export AWS_ACCESS_KEY_ID=\"$MINIO_ROOT_USER\" "
         "AWS_SECRET_ACCESS_KEY=\"$MINIO_ROOT_PASSWORD\" "
@@ -2218,8 +2234,11 @@ def _build_resume_shell_command(
         f" {aws} s3 cp --recursive {job_dir}/ {updated_uri}"
         f" && printf 'complete\\n' | {aws} s3 cp - {shlex.quote(staging_root + '/updated.complete')}"
         f" && {aws} s3 sync --delete {updated_uri} {results_uri}"
-        # Keep both snapshots for recovery if promotion partially fails or is interrupted.
-        " || exit $?; exit \"$harbor_rc\""
+        # No cleanup after a partial/failed promotion. Paused or errored trials
+        # retain every attempt's snapshots even when Harbor exits successfully.
+        " || exit $?;"
+        + cleanup_step
+        + ' exit "$harbor_rc"'
     )
 
 

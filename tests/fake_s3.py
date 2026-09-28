@@ -26,6 +26,8 @@ def main() -> int:
         stage = "bucket"
     elif operation == "sync":
         stage = "promote"
+    elif operation == "rm":
+        stage = "cleanup"
     elif operation == "cp":
         source, target = args[-2:]
         stage = "upload"
@@ -58,6 +60,10 @@ def main() -> int:
             marker = resolve(args[-1])
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(sys.stdin.read())
+        return 23 if fail else 0
+    if stage == "cleanup":
+        if not fail:
+            shutil.rmtree(resolve(args[-1]), ignore_errors=True)
         return 23 if fail else 0
 
     source, target = map(resolve, args[-2:])

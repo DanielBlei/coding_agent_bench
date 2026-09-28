@@ -153,14 +153,49 @@ def update_endpoint(job_dir: Path, server_url: str) -> None:
     _restore_agent_mounts(json.loads((job_dir / "config.json").read_text()), server_url)
 
 
+def is_job_complete(job_dir: Path) -> bool:
+    """Require a finished, error-free result before discarding recovery snapshots.
+
+    A cooperative pause also exits with status zero. Check both the current
+    pod's pause request and trial counts; preemption.json can describe an older
+    attempt restored from MinIO and must not block a later successful resume.
+    Missing or malformed metadata is not proof of completion.
+    """
+    from coding_agent_bench.preemption import PAUSE_REQUEST_PATH
+
+    try:
+        request = Path(os.environ.get("CAB_PAUSE_REQUEST_PATH", PAUSE_REQUEST_PATH))
+        if request.exists():
+            return False
+        result = json.loads((job_dir / "result.json").read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(result, dict) or not result.get("finished_at"):
+        return False
+    total = result.get("n_total_trials")
+    stats = result.get("stats")
+    if type(total) is not int or total < 0 or not isinstance(stats, dict):
+        return False
+    expected = {
+        "n_completed_trials": total,
+        "n_pending_trials": 0,
+        "n_running_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_errored_trials": 0,
+    }
+    return all(type(stats.get(key)) is int and stats[key] == value for key, value in expected.items())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("parent", "endpoint"))
+    parser.add_argument("operation", choices=("parent", "endpoint", "complete"))
     parser.add_argument("job_dir", type=Path)
     parser.add_argument("server_url", nargs="?")
     args = parser.parse_args()
     if args.operation == "parent":
         update_parent(args.job_dir, os.environ["HARBOR_PARENT"])
+    elif args.operation == "complete":
+        raise SystemExit(0 if is_job_complete(args.job_dir) else 1)
     elif args.server_url is None:
         parser.error("endpoint requires server_url")
     else:

@@ -17,7 +17,7 @@ import pytest
 
 from coding_agent_bench import VERSION, api
 from coding_agent_bench.job import DEFAULT_CODING_AGENT_BENCH_IMAGE, OpenshiftJob
-from coding_agent_bench.resume import update_endpoint, update_parent
+from coding_agent_bench.resume import is_job_complete, update_endpoint, update_parent
 
 
 @pytest.fixture
@@ -40,6 +40,14 @@ def test_worker_image_default_is_version_tagged_and_configurable(monkeypatch):
 
     monkeypatch.setenv("CODING_AGENT_BENCH_IMAGE", "registry.example.com/cab:test")
     assert job._job_spec(["echo", "hi"])["spec"]["template"]["spec"]["containers"][0]["image"] == "registry.example.com/cab:test"
+
+
+@pytest.mark.parametrize("document", [None, "{broken", "null", "[]", '{}'])
+def test_missing_or_malformed_result_is_not_complete(tmp_path, monkeypatch, document):
+    monkeypatch.setenv("CAB_PAUSE_REQUEST_PATH", str(tmp_path / "request.json"))
+    if document is not None:
+        (tmp_path / "result.json").write_text(document)
+    assert not is_job_complete(tmp_path)
 
 
 @pytest.mark.parametrize("new_url,api_url", [
