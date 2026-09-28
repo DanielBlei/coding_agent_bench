@@ -1,0 +1,8 @@
+resources:
+  - ./cronjob.yaml
+  - ./intake-poller-ca.yaml
+
+labels:
+  - pairs:
+      app: intake-poller
+      
