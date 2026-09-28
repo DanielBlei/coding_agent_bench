@@ -45,6 +45,12 @@ jobs:
             oc -n "$NAMESPACE" get secret "$secret" >/dev/null
           done
 
+      - name: Apply MinIO
+        run: oc apply -k deploy/job-queue -n "$NAMESPACE"
+      
+      - name: Wait for MinIO rollout
+        run: oc rollout status deployment/harbor-minio -n "$NAMESPACE" --timeout=10m
+
       - name: Apply job queue
         run: oc apply -k deploy/job-queue -n "$NAMESPACE"
 
