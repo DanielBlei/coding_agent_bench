@@ -1,6 +1,7 @@
 """Queue-driven restoration, endpoint changes, and repeated resume coverage."""
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException
 import pytest
 
-from coding_agent_bench import api
+from coding_agent_bench import VERSION, api
 from coding_agent_bench.job import DEFAULT_CODING_AGENT_BENCH_IMAGE, OpenshiftJob
 from coding_agent_bench.resume import update_endpoint, update_parent
 
@@ -35,7 +36,7 @@ def test_worker_image_default_is_version_tagged_and_configurable(monkeypatch):
     image = job._job_spec(["echo", "hi"])["spec"]["template"]["spec"]["containers"][0]["image"]
     resume_image = job._resume_job_spec("echo hi")["spec"]["template"]["spec"]["containers"][0]["image"]
     assert image == resume_image == DEFAULT_CODING_AGENT_BENCH_IMAGE
-    assert image == "ghcr.io/redhat-et/coding_agent_bench:v0.2.6"
+    assert image == f"ghcr.io/redhat-et/coding_agent_bench:v{VERSION}"
 
     monkeypatch.setenv("CODING_AGENT_BENCH_IMAGE", "registry.example.com/cab:test")
     assert job._job_spec(["echo", "hi"])["spec"]["template"]["spec"]["containers"][0]["image"] == "registry.example.com/cab:test"
@@ -157,6 +158,90 @@ def test_ui_explains_and_offers_manual_resume_for_exhausted_checkpoint(store, mo
     assert "other" in completed
 
 
+@pytest.mark.parametrize("child_status", [
+    api.JobStatus.QUEUED, api.JobStatus.RUNNING,
+    api.JobStatus.COMPLETED, api.JobStatus.FAILED,
+])
+def test_checkpoint_resume_remains_claimed_after_refresh_and_restart(store, monkeypatch, child_status):
+    monkeypatch.setattr(api, "_nebius", None)
+    store.insert("original", "benchmark", "codex", "dataset", "model", "https://model.example.com", [])
+    store.update_status("original", api.JobStatus.FAILED, error="checkpoint saved for manual resume")
+
+    response = asyncio.run(api.resume_job("original"))
+    child_id = response["job_id"]
+    store.update_status(child_id, child_status)
+    # A new store simulates a service restart; the claim must be durable.
+    restarted = api.JobStore(store._db_path)
+    monkeypatch.setattr(api, "job_store", restarted)
+    assert restarted.get("original")["resumed_by_job_id"] == child_id
+    page = asyncio.run(api.ui())
+    assert 'data-resume-job-id="original"' not in page
+    assert child_id in page.split("<h2>Completed</h2>", 1)[1]
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(api.resume_job("original"))
+    assert exc.value.status_code == 409
+    assert child_id in exc.value.detail
+    assert len(restarted.list()) == 2
+    assert len(api._job_queue) == 1
+
+
+def test_newly_exhausted_resume_can_be_resumed_again(store, monkeypatch):
+    monkeypatch.setattr(api, "_nebius", None)
+    store.insert("original", "benchmark", "codex", "dataset", "model", "https://model.example.com", [])
+    store.update_status("original", api.JobStatus.FAILED, error="checkpoint saved for manual resume")
+    child_id = asyncio.run(api.resume_job("original"))["job_id"]
+    store.update_status(child_id, api.JobStatus.FAILED, error="checkpoint saved for manual resume")
+
+    page = asyncio.run(api.ui())
+    assert 'data-resume-job-id="original"' not in page
+    assert f'data-resume-job-id="{child_id}"' in page
+    next_id = asyncio.run(api.resume_job(child_id))["job_id"]
+    assert store.get(child_id)["resumed_by_job_id"] == next_id
+    assert store.get(next_id)["results_job_name"] == "benchmark"
+
+
+def test_checkpoint_claim_and_child_insert_are_atomic(store):
+    store.insert("original", "benchmark", "codex", "dataset", "model", "https://model.example.com", [])
+    store.update_status("original", api.JobStatus.FAILED, error="checkpoint saved for manual resume")
+
+    def insert_child(child_id):
+        return store.insert(
+            child_id, "benchmark--resume", "codex", "dataset", "model",
+            "https://model.example.com", [], results_job_name="benchmark",
+            resume_parent_id="original",
+        )
+
+    # A failed child insertion must not leave an orphaned parent claim.
+    with pytest.raises(sqlite3.IntegrityError):
+        insert_child("original")
+    assert store.get("original")["resumed_by_job_id"] is None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(insert_child, ["child-a", "child-b"]))
+    assert sorted(results) == [False, True]
+    winner = ["child-a", "child-b"][results.index(True)]
+    assert store.get("original")["resumed_by_job_id"] == winner
+    assert {row["job_id"] for row in store.list()} == {"original", winner}
+
+
+def test_checkpoint_resume_refuses_state_change_during_claim(store, monkeypatch):
+    store.insert("original", "benchmark", "codex", "dataset", "model", "https://model.example.com", [])
+    store.update_status("original", api.JobStatus.FAILED, error="checkpoint saved for manual resume")
+    insert = store.insert
+
+    def change_state(*args, **kwargs):
+        store.update_status("original", api.JobStatus.CANCELLED)
+        return insert(*args, **kwargs)
+
+    monkeypatch.setattr(store, "insert", change_state)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(api.resume_job("original"))
+    assert exc.value.status_code == 409
+    assert len(store.list()) == 1
+    assert store.get("original")["resumed_by_job_id"] is None
+    assert api._job_queue == []
+
+
 def test_generated_preparation_steps_execute_with_quoted_paths(tmp_path):
     directory = tmp_path / "job with ' quotes"
     directory.mkdir()
@@ -202,6 +287,7 @@ def test_database_migration_recovers_legacy_artifact_paths(tmp_path):
     connection.commit()
     connection.close()
     migrated = api.JobStore(path)
+    assert migrated.get("normal")["resumed_by_job_id"] is None
     assert migrated.get("normal")["results_job_name"] == "real-name--resume"
     assert migrated.get("resume")["results_job_name"] == "job with spaces"
     assert api.JobStore(path).get("resume")["results_job_name"] == "job with spaces"

@@ -692,6 +692,28 @@ def test_recovery_loop_processes_one_retained_pause_per_pass(monkeypatch):
     assert next(row for row in store._rows if row["job_id"] == "p3")["status"] == "pausing"
 
 
+def test_recovery_loop_rotates_past_unconfirmed_checkpoints(monkeypatch):
+    from coding_agent_bench import api
+
+    store = LoopStore([
+        {"job_id": "blocked", "status": "pausing"},
+        {"job_id": "later", "status": "pausing"},
+        paused_row(),
+    ])
+    attempted = []
+
+    async def retain_checkpoint(job_id, _job):
+        attempted.append(job_id)
+        return False  # Both rows remain pausing across all recovery passes.
+
+    monkeypatch.setattr(api, "_pause_commit", retain_checkpoint)
+    queue = run_recovery_loop(monkeypatch, LoopNebius(), store, passes=3)
+
+    assert attempted == ["blocked", "later", "blocked"]
+    assert [row["job_id"] for row in store.list_pausing()] == ["blocked", "later"]
+    assert [job.job_id for job in queue] == ["p1"]
+
+
 def test_recovery_loop_stays_paused_when_nebius_unavailable(monkeypatch):
 
     store = LoopStore([paused_row()])

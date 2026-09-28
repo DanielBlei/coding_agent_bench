@@ -519,6 +519,7 @@ class JobResponse(BaseModel):
     error: str | None = None
     idempotency_key: str | None = None
     results_job_name: str | None = None
+    resumed_by_job_id: str | None = None
 
 
 class JobStore:
@@ -551,7 +552,8 @@ class JobStore:
                 idempotency_key TEXT,
                 preempt_attempts INTEGER NOT NULL DEFAULT 0,
                 pause_checkpointed INTEGER NOT NULL DEFAULT 0,
-                results_job_name TEXT
+                results_job_name TEXT,
+                resumed_by_job_id TEXT
             )"""
         )
         # Migrate columns when upgrading from an older schema.
@@ -566,6 +568,8 @@ class JobStore:
             conn.execute("ALTER TABLE jobs ADD COLUMN pause_checkpointed INTEGER NOT NULL DEFAULT 0")
         if "results_job_name" not in columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN results_job_name TEXT")
+        if "resumed_by_job_id" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN resumed_by_job_id TEXT")
         # Legacy resume commands retain the real artifact path even when their
         # display names have acquired one or more --resume suffixes.
         for row in conn.execute(
@@ -593,10 +597,23 @@ class JobStore:
         command: list[str],
         idempotency_key: str | None = None,
         results_job_name: str | None = None,
-    ):
-        """Add a new job to the tracking table."""
+        resume_parent_id: str | None = None,
+    ) -> bool:
+        """Insert a job, optionally claiming a failed checkpoint in the same transaction.
+
+        Return False when another resume already claimed the parent or its state
+        changed. An insertion failure rolls back the claim with the new row.
+        """
         conn = self._connect()
         try:
+            if resume_parent_id is not None:
+                claimed = conn.execute(
+                    "UPDATE jobs SET resumed_by_job_id = ? "
+                    "WHERE job_id = ? AND status = ? AND resumed_by_job_id IS NULL",
+                    (job_id, resume_parent_id, JobStatus.FAILED.value),
+                )
+                if claimed.rowcount == 0:
+                    return False
             conn.execute(
                 "INSERT INTO jobs "
                 "(job_id, job_name, agent, dataset, model_name, server_url, command, status, idempotency_key, results_job_name) "
@@ -615,6 +632,7 @@ class JobStore:
                 ),
             )
             conn.commit()
+            return True
         finally:
             conn.close()
 
@@ -898,6 +916,7 @@ async def _resume_paused_jobs_loop():
     full re-provisioning (recreate if needed, vLLM start, new-IP rewrite) to
     the worker's normal acquire path.
     """
+    last_pausing_job_id = None
     while True:
         await asyncio.sleep(PAUSED_POLL_INTERVAL_SECONDS)
         if _nebius is None or _shutting_down:
@@ -907,8 +926,16 @@ async def _resume_paused_jobs_loop():
         try:
             # A slow/failed upload must not be turned into a resumable checkpoint.
             # Revisit retained parents after the worker's bounded wait expires.
-            pending = next(iter(job_store.list_pausing()), None)
-            if pending is not None:
+            pending_rows = job_store.list_pausing()
+            last_index = next(
+                (index for index, row in enumerate(pending_rows)
+                 if row["job_id"] == last_pausing_job_id),
+                -1,
+            )
+            if pending_rows:
+                # Rotate even when a checkpoint stays unconfirmed indefinitely.
+                pending = pending_rows[(last_index + 1) % len(pending_rows)]
+                last_pausing_job_id = pending["job_id"]
                 await _pause_commit(
                     pending["job_id"], OpenshiftJob(pending["job_id"])
                 )
@@ -1703,7 +1730,7 @@ async def ui():
     Accessible without authentication for status visibility. Actions that modify
     jobs still require the API key through their protected endpoints.
     """
-    columns = ["job_id", "job_name", "agent", "dataset", "model_name", "server_url", "status", "error"]
+    columns = ["job_id", "job_name", "agent", "dataset", "model_name", "server_url", "status", "error", "resumed_by_job_id"]
 
     def build_table(
         title: str, jobs: list[dict], include_resume_action: bool = False
@@ -1737,6 +1764,7 @@ async def ui():
     manual_resume_required = [
         row for row in failed
         if "checkpoint saved for manual resume" in (row.get("error") or "")
+        and not row.get("resumed_by_job_id")
     ]
     manual_resume_ids = {row["job_id"] for row in manual_resume_required}
     manual_resume_required.reverse()
@@ -2201,6 +2229,11 @@ async def resume_job(job_id: str, req: ResumeJobRequest = ResumeJobRequest()):
     job_row = job_store.get(job_id)
     if not job_row:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job_row.get("resumed_by_job_id"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Checkpoint already resumed by job {job_row['resumed_by_job_id']}",
+        )
     if job_row["status"] not in (
         JobStatus.COMPLETED.value,
         JobStatus.FAILED.value,
@@ -2246,11 +2279,18 @@ async def resume_job(job_id: str, req: ResumeJobRequest = ResumeJobRequest()):
         _job_queue.append(QueuedJob(job_id, command, effective_server_url, job_row["model_name"]))
         _job_event.set()
         return {"message": "Paused job queued for resume", "job_id": job_id, "job_name": job_row["job_name"]}
-    job_store.insert(
+    claim_checkpoint = (
+        job_row["status"] == JobStatus.FAILED.value
+        and "checkpoint saved for manual resume" in (job_row.get("error") or "")
+    )
+    inserted = job_store.insert(
         resume_job_id, resume_job_name, job_row["agent"],
         job_row["dataset"], job_row["model_name"], effective_server_url, command,
         results_job_name=original_job_name,
+        **({"resume_parent_id": job_id} if claim_checkpoint else {}),
     )
+    if claim_checkpoint and not inserted:
+        raise HTTPException(status_code=409, detail="Checkpoint was claimed or job state changed; refresh before retrying")
     _job_queue.append(QueuedJob(resume_job_id, command, effective_server_url, job_row["model_name"]))
     _job_event.set()
 
