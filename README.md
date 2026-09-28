@@ -338,12 +338,21 @@ Resumed jobs keep recovery snapshots under
 `s3://results-staging/<original-job-name>/<attempt>/` before syncing updated
 artifacts to `s3://results/<original-job-name>/`.
 
-After a successful resume and sync, all staging attempts for that job are removed
+After a successful resume and sync, manifest-owned staging objects for that job are removed
 only when Harbor reports every trial completed, with no pending, running,
 cancelled, or errored trials, and the current pod has no pause request. Paused,
 failed, or incompletely synced runs retain their snapshots. A cleanup failure is
-logged without failing the completed benchmark. Legacy job names containing `/`
-retain snapshots to avoid deleting another job's nested prefix.
+logged without failing the completed benchmark. Each new snapshot marker records
+the exact job, attempt, and uploaded file names. Cleanup deletes only those keys,
+so nested job names and unrelated objects remain intact. Legacy snapshots without
+ownership manifests are retained. If deletion partially fails, its manifest stays
+available for a later cleanup attempt.
+
+A job stuck in `pausing` can be cancelled through `DELETE /jobs/<job_id>` when
+OpenShift confirms its parent Job is absent and its checkpoint is still
+unconfirmed. Cancellation is queued for workload cleanup and survives service
+restarts; it does not mark the checkpoint as usable. Jobs whose parents still
+exist, or whose checkpoints are being finalized, remain protected from this path.
 
 ### (Optional) Connect to Nebius
 

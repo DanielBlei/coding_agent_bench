@@ -36,6 +36,13 @@ uv() {
                 parent) record parent ;;
                 endpoint) record url ;;
                 complete) record complete; shift; "$TEST_PYTHON" "$@" ;;
+                manifest)
+                    if [ "$FAIL_STAGE" = "inventory-$8" ]; then
+                        record "$FAIL_STAGE"; return $?
+                    fi
+                    shift; "$TEST_PYTHON" "$@"
+                    ;;
+                cleanup) record cleanup || return $?; shift; "$TEST_PYTHON" "$@" ;;
                 *) return 99 ;;
             esac
             ;;
@@ -80,11 +87,17 @@ def run_shell(tmp_path, command, harbor_rc=0, fail_stage="", job_name=None, buck
     (original / "stale-trial").mkdir()
     (original / "stale-trial" / "result.json").write_text("old trial")
     (remote / "results-staging").mkdir(exist_ok=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    aws_shim = bin_dir / "aws"
+    aws_shim.write_text('#!/bin/sh\nexec "$TEST_PYTHON" "$FAKE_S3" "$@"\n')
+    aws_shim.chmod(0o755)
     command = command.replace("/app/jobs", str(tmp_path / "jobs"))
     result = subprocess.run(
         ["bash", "-c", SHELL_STUBS + command],
         env={
             **os.environ,
+            "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
             "TRACE": str(trace),
             "HARBOR_RC": str(harbor_rc),
             "FAIL_STAGE": fail_stage,
@@ -328,6 +341,12 @@ def test_completed_resume_removes_only_its_jobs_staging(tmp_path, queue_api, job
     for path in (previous, neighbor):
         path.parent.mkdir(parents=True)
         path.write_text("complete")
+    previous.write_text(json.dumps({
+        "version": 1, "job_name": job_name, "attempt": "earlier-attempt",
+        "phase": "original", "files": ["result.json"],
+    }))
+    (previous.parent / "original").mkdir()
+    (previous.parent / "original/result.json").write_text("earlier result")
     command = queue_api._build_resume_shell_command(job_name, "current", [], None)
 
     status, calls = run_shell(tmp_path, command, job_name=job_name)
@@ -378,14 +397,47 @@ def test_staging_cleanup_failure_preserves_completed_job(tmp_path, queue_api):
     assert (snapshots / "updated.complete").exists()
 
 
-def test_legacy_nested_name_retains_staging(tmp_path, queue_api):
+def test_nested_name_cleanup_preserves_legacy_snapshot(tmp_path, queue_api):
     job_name = "group/job"
+    legacy = tmp_path / "remote/results-staging/group/job/legacy/original.complete"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("complete")
     command = queue_api._build_resume_shell_command(job_name, "current", [], None)
     status, calls = run_shell(tmp_path, command, job_name=job_name)
     assert status == 0
     assert "promote" in calls
+    assert "cleanup" in calls
+    assert not (tmp_path / "remote/results-staging/group/job/current").exists()
+    assert legacy.read_text() == "complete"
+
+
+@pytest.mark.parametrize("phase", ["original", "updated"])
+def test_inventory_failure_prevents_promotion_and_cleanup(tmp_path, queue_api, phase):
+    command = enqueue_resume(queue_api).command[2]
+    status, calls = run_shell(tmp_path, command, fail_stage=f"inventory-{phase}")
+    assert status == 23
+    assert "promote" not in calls
     assert "cleanup" not in calls
-    assert (tmp_path / "remote/results-staging/group/job/current/original.complete").exists()
+    assert (tmp_path / "remote/results/job with spaces/result.json").read_text() == "original result\n"
+
+
+def test_parent_cleanup_preserves_nested_jobs_and_unlisted_objects(tmp_path, queue_api):
+    """An ancestor job may never recursively delete another job's snapshots."""
+    staging = tmp_path / "remote/results-staging/parent"
+    nested = staging / "child/attempt/original.complete"
+    unlisted = staging / "current/original/unlisted.json"
+    for path in (nested, unlisted):
+        path.parent.mkdir(parents=True)
+        path.write_text("keep")
+    command = queue_api._build_resume_shell_command("parent", "current", [], None)
+    status, calls = run_shell(tmp_path, command, job_name="parent")
+    assert status == 0
+    assert "cleanup" in calls
+    assert nested.read_text() == "keep"
+    assert unlisted.read_text() == "keep"
+    assert not (staging / "current/original.complete").exists()
+    assert not (staging / "current/updated.complete").exists()
+    assert not (staging / "current/original/result.json").exists()
 
 
 def test_each_resume_has_a_unique_snapshot_prefix(queue_api):

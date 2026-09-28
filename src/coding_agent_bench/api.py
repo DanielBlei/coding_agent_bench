@@ -761,6 +761,24 @@ class JobStore:
         finally:
             conn.close()
 
+    def cancel_unconfirmed_pause(self, job_id: str) -> bool:
+        """Claim orphan cancellation without racing successful checkpoint finalization."""
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "UPDATE jobs SET status = ?, error = ? "
+                "WHERE job_id = ? AND status = ? AND pause_checkpointed = 0",
+                (
+                    JobStatus.CANCELLING.value,
+                    "Cancellation requested: parent Job missing; checkpoint unconfirmed",
+                    job_id, JobStatus.PAUSING.value,
+                ),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
     def pause_commit(
         self,
         job_id: str,
@@ -2089,12 +2107,29 @@ async def get_job(job_id: str):
 
 @router.delete("/jobs/{job_id}")
 async def delete_job(job_id: str):
-    """Cancel a queued or running job."""
+    """Cancel a queued, running, paused, or verifiably orphaned pausing job."""
     job_row = job_store.get(job_id)
     if not job_row:
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job_row["status"] == JobStatus.CANCELLING.value:
+        return {"message": "Job cancelling", "job_id": job_id}
+
+    if job_row["status"] == JobStatus.PAUSING.value:
+        if job_row.get("pause_checkpointed"):
+            raise HTTPException(status_code=409, detail="Checkpoint finalization in progress; retry after the job is paused")
+        try:
+            existing = await OpenshiftJob(job_id)._get_job()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to verify the parent Job is absent; cancellation deferred") from exc
+        if existing is not None:
+            raise HTTPException(status_code=400, detail="Job is still checkpointing; parent Job must be retained")
+        if not job_store.cancel_unconfirmed_pause(job_id):
+            raise HTTPException(status_code=409, detail="Job state or checkpoint changed; refresh before retrying")
+        # Route orphan task-pod cleanup through the serial worker, with durable
+        # cancelling state so a service restart also resumes cleanup.
+        _job_queue.append(QueuedJob(job_id, [], job_row["server_url"], job_row["model_name"], True))
+        _job_event.set()
         return {"message": "Job cancelling", "job_id": job_id}
 
     if job_row["status"] in (
@@ -2103,7 +2138,6 @@ async def delete_job(job_id: str):
         JobStatus.FAILING,
         JobStatus.FAILED,
         JobStatus.CANCELLED,
-        JobStatus.PAUSING,
     ):
         raise HTTPException(status_code=400, detail=f"Job already {job_row['status']}")
 
@@ -2199,20 +2233,30 @@ def _build_resume_shell_command(
     if server_url and _parse_nebius_url(server_url) is None and not is_openrouter(server_url):
         url_replace_step = _build_url_replace_shell_step(server_url, py_job_dir)
 
-    cleanup_step = ""
-    # Flat job names have disjoint prefixes. Avoid deleting nested jobs' backups
-    # for legacy names containing '/', or the bucket itself for an empty name.
-    if original_job_name and "/" not in original_job_name:
-        completion_check = shlex.join([
+    completion_check = shlex.join([
+        "uv", "run", "--no-sync", "--no-cache", "python", "-m",
+        "coding_agent_bench.resume", "complete", py_job_dir,
+    ])
+    cleanup = shlex.join([
+        "uv", "run", "--no-sync", "--no-cache", "python", "-m",
+        "coding_agent_bench.staging", "cleanup", original_job_name,
+    ])
+    cleanup_step = (
+        f' if [ "$harbor_rc" -eq 0 ] && {completion_check}; then {cleanup}'
+        " || printf 'Staging cleanup failed; canonical results are synced.\\n' >&2;"
+        " fi;"
+    )
+    markers = {}
+    for phase in ("original", "updated"):
+        manifest = shlex.join([
             "uv", "run", "--no-sync", "--no-cache", "python", "-m",
-            "coding_agent_bench.resume", "complete", py_job_dir,
+            "coding_agent_bench.staging", "manifest", py_job_dir,
+            original_job_name, staging_id, phase,
         ])
-        staging_job_uri = shlex.quote(f"s3://results-staging/{original_job_name}/")
-        cleanup_step = (
-            f' if [ "$harbor_rc" -eq 0 ] && {completion_check}; then'
-            f" {aws} s3 rm --recursive {staging_job_uri}"
-            " || printf 'Staging cleanup failed; canonical results are synced.\\n' >&2;"
-            " fi;"
+        # pipefail prevents a failed inventory from publishing a usable marker.
+        markers[phase] = (
+            f"(set -o pipefail; {manifest} | {aws} s3 cp - "
+            f"{shlex.quote(staging_root + '/' + phase + '.complete')})"
         )
 
     return (
@@ -2227,12 +2271,12 @@ def _build_resume_shell_command(
         f" || {aws} s3api head-bucket --bucket results-staging)"
         # Preserve the original before Harbor removes/retries local trial files.
         f" && {aws} s3 cp --recursive {results_uri} {original_uri}"
-        f" && printf 'complete\\n' | {aws} s3 cp - {shlex.quote(staging_root + '/original.complete')}"
+        f" && {markers['original']}"
         " || exit $?; "
         f"{_build_logged_shell_step(resume_command, py_job_dir)}"
         # Never touch the canonical prefix until the entire updated upload succeeds.
         f" {aws} s3 cp --recursive {job_dir}/ {updated_uri}"
-        f" && printf 'complete\\n' | {aws} s3 cp - {shlex.quote(staging_root + '/updated.complete')}"
+        f" && {markers['updated']}"
         f" && {aws} s3 sync --delete {updated_uri} {results_uri}"
         # No cleanup after a partial/failed promotion. Paused or errored trials
         # retain every attempt's snapshots even when Harbor exits successfully.

@@ -1045,6 +1045,7 @@ def test_delete_pausing_job_is_rejected(monkeypatch):
 
     store = FlowStore({"job_id": "p1", "status": "pausing", "preempt_attempts": 1, "error": "x"})
     monkeypatch.setattr(api, "job_store", store)
+    monkeypatch.setattr(api, "OpenshiftJob", lambda *_args: FlowJob(job=running_job()))
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(api.delete_job("p1"))
