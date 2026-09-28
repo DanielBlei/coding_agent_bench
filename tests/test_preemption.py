@@ -671,6 +671,27 @@ def test_recovery_loop_flips_paused_job_after_stabilizing(monkeypatch):
     assert queue[0].command == ["bash", "-c", "resume-cmd"]
 
 
+def test_recovery_loop_processes_one_retained_pause_per_pass(monkeypatch):
+    from coding_agent_bench import api
+
+    pending = [
+        {"job_id": f"p{index}", "status": "pausing"}
+        for index in range(1, 4)
+    ]
+    store = LoopStore(pending)
+    attempted = []
+
+    async def finish_pause(job_id, _job):
+        attempted.append(job_id)
+        store._apply(job_id, "failed", "still retained")
+
+    monkeypatch.setattr(api, "_pause_commit", finish_pause)
+    run_recovery_loop(monkeypatch, LoopNebius(), store, passes=2)
+
+    assert attempted == ["p1", "p2"]
+    assert next(row for row in store._rows if row["job_id"] == "p3")["status"] == "pausing"
+
+
 def test_recovery_loop_stays_paused_when_nebius_unavailable(monkeypatch):
 
     store = LoopStore([paused_row()])

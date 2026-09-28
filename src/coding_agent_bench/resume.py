@@ -128,33 +128,13 @@ def _update_agent_endpoint(agent: dict, server_url: str) -> None:
 
 
 def _restore_agent_mounts(config: dict, server_url: str) -> None:
-    """Recreate model configuration files that lived outside the uploaded job dir."""
-    for agent in config.get("agents") or []:
-        name = agent.get("name")
-        model = agent.get("model_name", "").removeprefix("vllm/")
-        for mount in config.get("environment", {}).get("mounts") or []:
-            source, target = mount.get("source"), mount.get("target", "")
-            if not source:
-                continue
-            path = Path(source)
-            if name == "codex" and target == "/root/.codex/config.toml":
-                from coding_agent_bench.helpers.codex import codex_create_toml
+    """Let each registered agent recreate its own external bind-mounted files."""
+    from coding_agent_bench.agents import AGENT_REGISTRY
 
-                path.parent.mkdir(parents=True, exist_ok=True)
-                codex_create_toml(
-                    model, server_url, path,
-                    openrouter="OPENROUTER_API_KEY" in (agent.get("env") or {}),
-                )
-            elif name == "pi" and target == "/root/.pi/agent/models.json":
-                data = json.loads(path.read_text()) if path.exists() else {
-                    "providers": {"vllm": {
-                        "api": "openai-completions", "apiKey": "NONE",
-                        "models": [{"id": model, "name": model}],
-                    }},
-                }
-                data["providers"]["vllm"]["baseUrl"] = server_url.rstrip("/").removesuffix("/v1") + "/v1"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                _write_metadata(path, data)
+    for agent in _agents(config):
+        agent_config = AGENT_REGISTRY.get(agent.get("name"))
+        if agent_config is not None:
+            agent_config.restore_mounts(config, server_url)
 
 
 def update_endpoint(job_dir: Path, server_url: str) -> None:

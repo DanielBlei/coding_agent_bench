@@ -210,9 +210,9 @@ def test_cancelled_filter_alias():
 @pytest.mark.parametrize("terminal,expected", [("Complete", True), ("Failed", False), (None, False)])
 def test_cooperative_request_requires_successful_parent_completion(monkeypatch, terminal, expected):
     from coding_agent_bench.job import OpenshiftJob
-    from coding_agent_bench.preemption import PAUSE_REQUEST_PATH
 
     calls = []
+    pod_request_path = "/var/run/cab/pause-from-pod.json"
 
     async def oc(command, **_kwargs):
         calls.append(command)
@@ -220,7 +220,7 @@ def test_cooperative_request_requires_successful_parent_completion(monkeypatch, 
             return json.dumps({"items": [{
                 "metadata": {"name": "parent"}, "status": {"phase": "Running"},
                 "spec": {"containers": [{"env": [
-                    {"name": "CAB_PAUSE_REQUEST_PATH", "value": PAUSE_REQUEST_PATH},
+                    {"name": "CAB_PAUSE_REQUEST_PATH", "value": pod_request_path},
                 ]}]},
             }]}), ""
         return "", ""
@@ -237,6 +237,26 @@ def test_cooperative_request_requires_successful_parent_completion(monkeypatch, 
     assert [call[0] for call in calls] == ["get", "exec"]
     assert "kill" not in calls[1][-1]
     assert "Nebius STOPPED" in calls[1][-1]
+    assert f"path = pathlib.Path({pod_request_path!r})" in calls[1][-1]
+
+
+def test_cooperative_request_rejects_parent_without_request_path(monkeypatch):
+    from coding_agent_bench.job import OpenshiftJob
+
+    calls = []
+
+    async def oc(command, **_kwargs):
+        calls.append(command)
+        return json.dumps({"items": [{
+            "metadata": {"name": "parent"}, "status": {"phase": "Running"},
+            "spec": {"containers": [{"env": []}]},
+        }]}), ""
+
+    job = OpenshiftJob("test")
+    monkeypatch.setattr(job, "_run_oc_command", oc)
+    with pytest.raises(RuntimeError, match="predates cooperative pause support"):
+        asyncio.run(job.request_pause("Nebius STOPPED"))
+    assert [call[0] for call in calls] == ["get"]
 
 
 def test_builder_enables_plugin_only_in_pause_capable_parent(monkeypatch):

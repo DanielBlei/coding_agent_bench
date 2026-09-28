@@ -907,7 +907,8 @@ async def _resume_paused_jobs_loop():
         try:
             # A slow/failed upload must not be turned into a resumable checkpoint.
             # Revisit retained parents after the worker's bounded wait expires.
-            for pending in job_store.list_pausing():
+            pending = next(iter(job_store.list_pausing()), None)
+            if pending is not None:
                 await _pause_commit(
                     pending["job_id"], OpenshiftJob(pending["job_id"])
                 )
@@ -1699,20 +1700,29 @@ async def ui():
     """
     User interface.
     
-    Intentionally left accessible to unauthenticated users as it does not expose any secret information
-    or allow users to modify any job.
+    Accessible without authentication for status visibility. Actions that modify
+    jobs still require the API key through their protected endpoints.
     """
     columns = ["job_id", "job_name", "agent", "dataset", "model_name", "server_url", "status", "error"]
 
-    def build_table(title: str, jobs: list[dict]) -> str:
+    def build_table(
+        title: str, jobs: list[dict], include_resume_action: bool = False
+    ) -> str:
         """Render one HTML job table for the unauthenticated status page."""
-        header = "".join(f"<th>{col}</th>" for col in columns)
+        table_columns = columns + (["action"] if include_resume_action else [])
+        header = "".join(f"<th>{col}</th>" for col in table_columns)
         rows = ""
         for job in jobs:
             cells = "".join(f"<td>{html.escape(str(job.get(col, '')) or '')}</td>" for col in columns)
+            if include_resume_action:
+                job_id = html.escape(str(job.get("job_id", "")), quote=True)
+                cells += (
+                    '<td><button type="button" data-resume-job-id="'
+                    f'{job_id}">Resume from checkpoint</button></td>'
+                )
             rows += f"<tr>{cells}</tr>"
         if not jobs:
-            rows = f'<tr><td colspan="{len(columns)}">No jobs</td></tr>'
+            rows = f'<tr><td colspan="{len(table_columns)}">No jobs</td></tr>'
         return f"<h2>{title}</h2><table><tr>{header}</tr>{rows}</table>"
 
     running = (
@@ -1723,7 +1733,18 @@ async def ui():
     )
     paused = job_store.list(JobStatus.PAUSING) + job_store.list(JobStatus.PAUSED)
     queued = job_store.list(JobStatus.QUEUED)
-    completed = job_store.list(JobStatus.COMPLETED) + job_store.list(JobStatus.FAILED) + job_store.list(JobStatus.CANCELLED)
+    failed = job_store.list(JobStatus.FAILED)
+    manual_resume_required = [
+        row for row in failed
+        if "checkpoint saved for manual resume" in (row.get("error") or "")
+    ]
+    manual_resume_ids = {row["job_id"] for row in manual_resume_required}
+    manual_resume_required.reverse()
+    completed = (
+        job_store.list(JobStatus.COMPLETED)
+        + [row for row in failed if row["job_id"] not in manual_resume_ids]
+        + job_store.list(JobStatus.CANCELLED)
+    )
     completed.reverse()
 
     # Build Nebius instances section if enabled
@@ -1789,6 +1810,37 @@ function clearApiKey() {{
 </script>
 """
 
+    manual_resume_script = """
+<script>
+document.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-resume-job-id]');
+    if (!button) return;
+
+    const apiKey = localStorage.getItem('coding_agent_bench_api_key');
+    if (!apiKey) {
+        window.alert('Save an API key above before resuming this job.');
+        return;
+    }
+
+    button.disabled = true;
+    try {
+        const jobId = button.dataset.resumeJobId;
+        const response = await fetch(`/jobs/${encodeURIComponent(jobId)}/resume`, {
+            method: 'POST',
+            headers: {'X-API-Key': apiKey},
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+        button.textContent = 'Resume queued';
+        window.setTimeout(() => window.location.reload(), 1000);
+    } catch (error) {
+        window.alert(`Could not resume job: ${error.message}`);
+        button.disabled = false;
+    }
+});
+</script>
+"""
+
     # Build submit form with current data
     nebius_enabled = os.environ.get("NEBIUS_ENABLED") == "1"
     submit_form_html = build_submit_form_html(
@@ -1817,10 +1869,13 @@ h1 svg {{ flex-shrink: 0; }}
   Job Queue <font size="4">v{VERSION}</font>
 </h1>
 {api_key_section}
+{manual_resume_script}
 {submit_form_html}
 {nebius_section}
 {build_table("Running", running)}
 {build_table("Paused (awaiting Nebius recovery)", paused)}
+<p>Paused jobs are waiting for automatic Nebius recovery. If automatic recovery attempts are exhausted, the saved checkpoint appears under “Manual resume required”.</p>
+{build_table("Manual resume required", manual_resume_required, include_resume_action=True)}
 {build_table("Queued", queued)}
 {build_table("Completed", completed)}
 </body>

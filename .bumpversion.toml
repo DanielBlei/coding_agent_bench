@@ -11,6 +11,11 @@ search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
 [[tool.bumpversion.files]]
+filename = "src/coding_agent_bench/job.py"
+search = 'DEFAULT_CODING_AGENT_BENCH_IMAGE = "ghcr.io/redhat-et/coding_agent_bench:v{current_version}"'
+replace = 'DEFAULT_CODING_AGENT_BENCH_IMAGE = "ghcr.io/redhat-et/coding_agent_bench:v{new_version}"'
+
+[[tool.bumpversion.files]]
 filename = "deploy/job-queue-service.yml"
 search = "ghcr.io/redhat-et/coding_agent_bench:v{current_version}"
 replace = "ghcr.io/redhat-et/coding_agent_bench:v{new_version}"

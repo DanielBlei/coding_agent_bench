@@ -15,7 +15,7 @@ from fastapi import HTTPException
 import pytest
 
 from coding_agent_bench import api
-from coding_agent_bench.job import OpenshiftJob
+from coding_agent_bench.job import DEFAULT_CODING_AGENT_BENCH_IMAGE, OpenshiftJob
 from coding_agent_bench.resume import update_endpoint, update_parent
 
 
@@ -27,6 +27,18 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "_job_event", asyncio.Event())
     monkeypatch.setattr(api, "_nebius", object())
     return database
+
+
+def test_worker_image_default_is_version_tagged_and_configurable(monkeypatch):
+    monkeypatch.delenv("CODING_AGENT_BENCH_IMAGE", raising=False)
+    job = OpenshiftJob(job_name="test")
+    image = job._job_spec(["echo", "hi"])["spec"]["template"]["spec"]["containers"][0]["image"]
+    resume_image = job._resume_job_spec("echo hi")["spec"]["template"]["spec"]["containers"][0]["image"]
+    assert image == resume_image == DEFAULT_CODING_AGENT_BENCH_IMAGE
+    assert image == "ghcr.io/redhat-et/coding_agent_bench:v0.2.6"
+
+    monkeypatch.setenv("CODING_AGENT_BENCH_IMAGE", "registry.example.com/cab:test")
+    assert job._job_spec(["echo", "hi"])["spec"]["template"]["spec"]["containers"][0]["image"] == "registry.example.com/cab:test"
 
 
 @pytest.mark.parametrize("new_url,api_url", [
@@ -115,6 +127,34 @@ def test_endpoint_restore_recreates_agent_mount_files(tmp_path, name, target, fi
         provider = json.loads(source.read_text())["providers"]["vllm"]
         assert provider["baseUrl"] == "http://203.0.113.20:8000/v1"
         assert provider["models"][0]["id"] == "org/model"
+
+
+def test_ui_explains_and_offers_manual_resume_for_exhausted_checkpoint(store, monkeypatch):
+    monkeypatch.setattr(api, "_nebius", None)
+    store.insert(
+        "manual", "interrupted", "codex", "dataset", "model",
+        "https://model.example.com", [],
+    )
+    store.update_status(
+        "manual",
+        api.JobStatus.FAILED,
+        error="VM preempted repeatedly; checkpoint saved for manual resume",
+    )
+    store.insert(
+        "other", "failed", "codex", "dataset", "model",
+        "https://model.example.com", [],
+    )
+    store.update_status("other", api.JobStatus.FAILED, error="Image pull failed")
+
+    page = asyncio.run(api.ui())
+
+    assert "Paused jobs are waiting for automatic Nebius recovery" in page
+    assert "Manual resume required" in page
+    assert 'data-resume-job-id="manual"' in page
+    assert "Resume from checkpoint" in page
+    completed = page.split("<h2>Completed</h2>", 1)[1]
+    assert "manual" not in completed
+    assert "other" in completed
 
 
 def test_generated_preparation_steps_execute_with_quoted_paths(tmp_path):

@@ -10,7 +10,7 @@ import json
 from coding_agent_bench.preemption import PAUSE_REQUEST_PATH
 
 
-DEFAULT_CODING_AGENT_BENCH_IMAGE = "ghcr.io/redhat-et/coding_agent_bench:latest"
+DEFAULT_CODING_AGENT_BENCH_IMAGE = "ghcr.io/redhat-et/coding_agent_bench:v0.2.6"
 
 
 def _job_image() -> str:
@@ -268,11 +268,19 @@ class OpenshiftJob:
         environment = [
             e for c in pod.get("spec", {}).get("containers", []) for e in c.get("env", [])
         ]
-        if not any(e.get("name") == "CAB_PAUSE_REQUEST_PATH" for e in environment):
+        request_path = next(
+            (
+                e.get("value")
+                for e in environment
+                if e.get("name") == "CAB_PAUSE_REQUEST_PATH"
+            ),
+            None,
+        )
+        if not request_path:
             raise RuntimeError("Parent pod predates cooperative pause support; retaining it for manual recovery")
         script = (
             "import json, pathlib, datetime; "
-            f"path = pathlib.Path({PAUSE_REQUEST_PATH!r}); "
+            f"path = pathlib.Path({request_path!r}); "
             f"request = {{'reason': {reason!r}, "
             "'requested_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}; "
             "temporary = path.with_suffix('.tmp'); "
