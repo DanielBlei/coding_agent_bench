@@ -106,7 +106,10 @@ spec:
           volumes:
           - name: google-sa-key
             secret:
-              secretName: intake-poller-google-sa
+              secretName: intake-poller-secret
+              items:
+                - key: service-account.json
+                  path: service-account.json
           - name: service-ca
             configMap:
               name: intake-poller-ca
