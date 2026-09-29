@@ -9,8 +9,6 @@ resources:
   - ./task-anyuid.yaml
   # Job Queue
   - ./pvc.yaml
-  - ./secret.yaml
-  - ./nebius-secret.yaml
   - ./deployment.yaml
   - ./service.yaml
   - ./route.yaml

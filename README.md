@@ -214,7 +214,7 @@ sequenceDiagram
     oc login --server=<server> --token=<token>
     ```
 
-2. Copy and fill in the Secret templates locally. Do not commit the resulting files:
+2. Copy the Secret templates locally, fill in their values, and do not commit the resulting files:
 
     ```sh
     cp deploy/minio/base/secret.example.yaml deploy/minio/base/secret.yaml
@@ -223,6 +223,13 @@ sequenceDiagram
     ```
 
     If you are not using Nebius, you still need to create the secret, but you can leave the default values and they will be ignored.
+
+    Apply the Secrets separately to the target project before deploying the services:
+
+    ```sh
+    oc apply -f deploy/minio/base/secret.yaml -n <project>
+    oc apply -f deploy/job-queue/base/secret.yaml -n <project>
+    ```
 
 3. Deploy the MinIO service to store job artifacts:
 
@@ -305,10 +312,11 @@ nebius iam auth-public-key generate \
   --output ~/.nebius/$SA_ID-credentials.json
 ```
 
-Once the service account is created, you can copy and fill in the values in [`deploy/job-queue/base/nebius-secret.example.yaml`](./deploy/job-queue/base/nebius-secret.example.yaml):
+Once the service account is created, copy [`deploy/job-queue/base/nebius-secret.example.yaml`](./deploy/job-queue/base/nebius-secret.example.yaml), fill in its values, and apply it separately. Do not commit the resulting file:
 
 ```sh
 cp deploy/job-queue/base/nebius-secret.example.yaml deploy/job-queue/base/nebius-secret.yaml
+oc apply -f deploy/job-queue/base/nebius-secret.yaml -n <project>
 ```
 
 ```yaml
@@ -337,10 +345,11 @@ When creating a job, set `server_url` to `nebius-<resource>` to use a managed Ne
 The intake poller is an optional CronJob to pull requests from a Google Sheet and submit them to the job queue.
 You can read more about this service in the [intake poller docs](./deploy/README.md#intake-poller).
 
-First, copy the secret in [`deploy/intake-poller/secret.example.yaml`](./deploy/intake-poller/secret.example.yaml) and fill in the values according to the [intake poller docs](./deploy/README.md#intake-poller). Do not commit this file.
+First, copy the secret in [`deploy/intake-poller/secret.example.yaml`](./deploy/intake-poller/secret.example.yaml), fill in the values according to the [intake poller docs](./deploy/README.md#intake-poller), and apply it separately. Do not commit this file.
 
 ```sh
 cp deploy/intake-poller/secret.example.yaml deploy/intake-poller/secret.yaml 
+oc apply -f deploy/intake-poller/base/secret.yaml -n <project>
 ```
 
 Then create the CronJob:
@@ -668,10 +677,11 @@ oc apply -f deploy/job-queue/base/task-sa.yaml
 oc apply -f deploy/job-queue/base/orchestrator-sa.yaml
 ```
 
-Copy the MinIO secret and fill in the values:
+Copy the MinIO secret, fill in the values, and apply it separately. Do not commit the resulting file:
 
 ```bash
 cp deploy/minio/base/secret.example.yaml deploy/minio/base/secret.yaml
+oc apply -f deploy/minio/base/secret.yaml -n <project>
 ```
 
 Create the MinIO deployment to store your job results:
