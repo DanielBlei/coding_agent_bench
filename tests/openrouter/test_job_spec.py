@@ -11,7 +11,7 @@ def test_job_spec_injects_openrouter_secret_only_when_openrouter():
     env = _env_by_name(job._job_spec(["echo", "hi"], openrouter=True))
     assert "OPENROUTER_API_KEY" in env
     ref = env["OPENROUTER_API_KEY"]["valueFrom"]["secretKeyRef"]
-    assert ref["name"] == "openrouter-api-key"
+    assert ref["name"] == "job-queue-secret"
     assert ref["key"] == "OPENROUTER_API_KEY"
     assert ref["optional"] is True
 

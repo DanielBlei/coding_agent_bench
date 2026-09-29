@@ -1,0 +1,10 @@
+resources:
+  - ./pvc.yaml
+  - ./deployment.yaml
+  - ./service.yaml
+  - ./api-route.yaml
+  - ./console-route.yaml
+
+labels:
+  - pairs:
+      app: harbor-minio
