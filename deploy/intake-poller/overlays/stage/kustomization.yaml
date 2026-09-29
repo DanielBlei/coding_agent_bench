@@ -6,7 +6,7 @@ resources:
 
 images:
   - name: ghcr.io/redhat-et/coding_agent_bench
-    newTag: latest
+    newTag: stage
 
 patches:
   - target:
