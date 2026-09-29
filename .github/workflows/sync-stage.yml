@@ -1,7 +1,7 @@
 name: Sync stage with main
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
@@ -22,7 +22,8 @@ jobs:
       - name: Check out stage
         uses: actions/checkout@v4
         with:
-          ref: stage
+          repository: ${{ github.repository }}
+          ref: refs/heads/stage
           fetch-depth: 0
 
       - name: Merge main into stage
