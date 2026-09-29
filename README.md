@@ -217,6 +217,7 @@ sequenceDiagram
 2. Copy and fill in the Secret templates locally. Do not commit the resulting files:
 
     ```sh
+    cp deploy/minio/base/secret.example.yaml deploy/minio/base/secret.yaml
     cp deploy/job-queue/base/secret.example.yaml deploy/job-queue/base/secret.yaml
     cp deploy/job-queue/base/nebius-secret.example.yaml deploy/job-queue/base/nebius-secret.yaml
     ```
@@ -667,7 +668,13 @@ oc apply -f deploy/job-queue/base/task-sa.yml
 oc apply -f deploy/job-queue/base/orchestrator-sa.yml
 ```
 
-Create a MinIO deployment to store your job results:
+Copy the MinIO secret and fill in the values:
+
+```bash
+cp deploy/minio/base/secret.example.yaml deploy/minio/base/secret.yaml
+```
+
+Create the MinIO deployment to store your job results:
 
 ```bash
 oc apply -k deploy/minio/overlays/prod
