@@ -240,8 +240,7 @@ oc apply -f deploy/intake-poller/base/secret.yaml
 ```
 
 Repeat these commands for both stage and production. The CI workflow checks for
-`job-queue-secret`, `nebius-secret`, `intake-poller-secret`, and
-`intake-poller-google-sa` before applying anything.
+`job-queue-secret`, `nebius-secret`, and `intake-poller-secret` before applying anything.
 
 ### OpenShift setup
 
