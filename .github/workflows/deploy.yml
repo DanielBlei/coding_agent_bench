@@ -46,6 +46,9 @@ jobs:
           for secret in job-queue-secret nebius-secret intake-poller-secret; do
             oc -n "$NAMESPACE" get secret "$secret" >/dev/null
           done
+          for key in ALLOW_INSECURE_QUEUE_HTTP SMTP_HOST SMTP_PORT SMTP_STARTTLS; do
+            test -n "$(oc -n "$NAMESPACE" get secret intake-poller-secret -o "jsonpath={.data.$key}")"
+          done
 
       - name: Apply MinIO
         run: oc apply -k deploy/minio/overlays/$OVERLAY -n "$NAMESPACE"
