@@ -43,7 +43,9 @@ jobs:
           set -euo pipefail
 
           test -n "$NAMESPACE"
-          oc -n "$NAMESPACE" get secret job-queue-secret >/dev/null
+          for secret in harbor-minio job-queue-secret; do
+            oc -n "$NAMESPACE" get secret "$secret" >/dev/null
+          done
           if oc -n "$NAMESPACE" get secret intake-poller-secret >/dev/null 2>&1; then
             for key in ALLOW_INSECURE_QUEUE_HTTP SMTP_HOST SMTP_PORT SMTP_STARTTLS; do
               test -n "$(oc -n "$NAMESPACE" get secret intake-poller-secret -o "jsonpath={.data.$key}")"

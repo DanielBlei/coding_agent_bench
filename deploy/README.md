@@ -218,29 +218,32 @@ job instead of creating a duplicate.
 `.github/workflows/deploy.yml` deploys both Kustomize applications with
 `oc`:
 
-- A merged pull request targeting `STAGE` deploys to `STAGE_NAMESPACE`.
+- A merged pull request targeting `stage` deploys to `STAGE_NAMESPACE`.
 - A version tag such as `v0.3.0` deploys to `PROD_NAMESPACE`.
 
 The workflow expects the Secrets to already exist in the target namespace. It
 only verifies them and applies the two Kustomizations. The files below are safe
 templates for local reference only; fill them in locally and do not commit them:
 
-- `deploy/job-queue/secret.example.yaml`
-- `deploy/job-queue/nebius-secret.example.yaml`
-- `deploy/intake-poller/secret.example.yaml`
+- `deploy/minio/base/secret.example.yaml`
+- `deploy/job-queue/base/secret.example.yaml`
+- `deploy/job-queue/base/nebius-secret.example.yaml`
+- `deploy/intake-poller/base/secret.example.yaml`
 
 Before the first CI deployment, apply the filled-in templates to each target
 namespace:
 
 ```sh
 oc project <namespace>
+oc apply -f deploy/minio/base/secret.yaml
 oc apply -f deploy/job-queue/base/secret.yaml
 oc apply -f deploy/job-queue/base/nebius-secret.yaml
 oc apply -f deploy/intake-poller/base/secret.yaml
 ```
 
 Repeat these commands for both stage and production. The CI workflow checks for
-`job-queue-secret`, `nebius-secret`, and `intake-poller-secret` before applying anything.
+`job-queue-secret` before applying anything. It also checks for `intake-poller-secret` 
+before applying the intake poller. `nebius-secret` is optional.
 
 ### OpenShift setup
 
