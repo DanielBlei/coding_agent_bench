@@ -7,14 +7,22 @@ import yaml
 from coding_agent_bench import api
 
 
-DEPLOYMENT_PATH = Path(__file__).parents[1] / "deploy" / "job-queue-service.yml"
-INTAKE_CRONJOB_PATH = Path(__file__).parents[1] / "deploy" / "intake-cronjob.yml"
+DEPLOYMENT_PATHS = (
+    Path(__file__).parents[1] / "deploy" / "job-queue" / "base" / "deployment.yaml",
+    Path(__file__).parents[1] / "deploy" / "job-queue" / "base" / "service.yaml",
+    Path(__file__).parents[1] / "deploy" / "job-queue" / "base" / "route.yaml",
+)
+INTAKE_CRONJOB_PATH = (
+    Path(__file__).parents[1] / "deploy" / "intake-poller" / "base" / "cronjob.yaml"
+)
 
 
 def _deployment_objects() -> dict[str, dict]:
     """Return queue manifest objects indexed by Kubernetes kind."""
-    with DEPLOYMENT_PATH.open() as manifest:
-        objects = list(yaml.safe_load_all(manifest))
+    objects = []
+    for path in DEPLOYMENT_PATHS:
+        with path.open() as manifest:
+            objects.extend(yaml.safe_load_all(manifest))
     return {obj["kind"]: obj for obj in objects}
 
 
