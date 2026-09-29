@@ -32,7 +32,10 @@ def _auto_approve_enabled() -> bool:
 
 def _is_stage_environment() -> bool:
     """Return whether the poller is running as a non-notifying stage test."""
-    return os.environ.get("ENVIRONMENT", "stage").lower() != "prod"
+    environment = os.environ.get("ENVIRONMENT", "").lower()
+    if environment not in {"prod", "stage"}:
+        raise ValueError("ENVIRONMENT must be set to either 'prod' or 'stage'")
+    return environment == "stage"
 
 
 def _queue_verify() -> str | bool:
@@ -114,8 +117,8 @@ def process_rows(
     sender_email: str,
 ) -> None:
     """Process approved, in-flight, and pending-notification spreadsheet rows."""
-    rows = sheets.get_all_rows()
     stage = _is_stage_environment()
+    rows = sheets.get_all_rows()
 
     for i, row in enumerate(rows):
         row_num = i + 1

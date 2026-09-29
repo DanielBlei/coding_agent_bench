@@ -1,12 +1,31 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from coding_agent_bench.intake.config import Column, Status
 from coding_agent_bench.intake.poller import (
+    _is_stage_environment,
     _queue_verify,
     _row_idempotency_key,
     _validate_queue_url,
     process_rows,
 )
+
+
+@pytest.fixture(autouse=True)
+def production_environment(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+
+
+def test_environment_must_be_explicitly_supported(monkeypatch):
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+
+    with pytest.raises(ValueError, match="ENVIRONMENT"):
+        _is_stage_environment()
+
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    with pytest.raises(ValueError, match="ENVIRONMENT"):
+        _is_stage_environment()
 
 
 def _make_row(**overrides) -> list[str]:
