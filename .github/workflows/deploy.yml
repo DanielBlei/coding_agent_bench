@@ -4,7 +4,8 @@ on:
   pull_request:
     types: [closed]
     branches:
-      - STAGE
+      - stage
+      - main
   push:
     tags:
       - 'v*'
@@ -20,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'pull_request' && 'stage' || 'production' }}
     env:
+      OVERLAY: ${{ github.event_name == 'pull_request' && 'stage' || 'prod' }}
       NAMESPACE: ${{ github.event_name == 'pull_request' && vars.STAGE_NAMESPACE || vars.PROD_NAMESPACE }}
       OPENSHIFT_SERVER: ${{ secrets.OPENSHIFT_SERVER }}
       OPENSHIFT_TOKEN: ${{ secrets.OPENSHIFT_TOKEN }}
@@ -41,21 +43,21 @@ jobs:
           set -euo pipefail
 
           test -n "$NAMESPACE"
-          for secret in job-queue-secret nebius-secret intake-poller-secret intake-poller-google-sa; do
+          for secret in job-queue-secret nebius-secret intake-poller-secret; do
             oc -n "$NAMESPACE" get secret "$secret" >/dev/null
           done
 
       - name: Apply MinIO
-        run: oc apply -k deploy/minio/overlays/prod -n "$NAMESPACE"
+        run: oc apply -k deploy/minio/overlays/$OVERLAY -n "$NAMESPACE"
       
       - name: Wait for MinIO rollout
         run: oc rollout status deployment/harbor-minio -n "$NAMESPACE" --timeout=10m
 
       - name: Apply job queue
-        run: oc apply -k deploy/job-queue/overlays/prod -n "$NAMESPACE"
+        run: oc apply -k deploy/job-queue/overlays/$OVERLAY -n "$NAMESPACE"
 
       - name: Wait for job queue rollout
         run: oc rollout status deployment/job-queue -n "$NAMESPACE" --timeout=10m
 
       - name: Apply intake poller
-        run: oc apply -k deploy/intake-poller/overlays/prod -n "$NAMESPACE"
+        run: oc apply -k deploy/intake-poller/overlays/$OVERLAY -n "$NAMESPACE"
