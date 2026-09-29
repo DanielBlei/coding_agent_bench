@@ -109,6 +109,46 @@ def test_empty_status_row_submitted_when_auto_approve(mock_httpx, mock_email):
 
 @patch("coding_agent_bench.intake.poller.send_queued_email")
 @patch("coding_agent_bench.intake.poller.httpx")
+def test_stage_submission_does_not_send_email(mock_httpx, mock_email, monkeypatch):
+    """Submit stage test rows without sending requester notifications."""
+    monkeypatch.setenv("ENVIRONMENT", "stage")
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"job_id": "uuid-stage"}
+    mock_httpx.post.return_value = mock_response
+
+    sheets = MagicMock()
+    sheets.get_all_rows.return_value = [_make_row(STATUS=Status.APPROVED.value)]
+
+    process_rows(sheets, "http://job-queue-service", "test-key", "bench@example.com")
+
+    mock_email.assert_not_called()
+    sheets.update_cell.assert_any_call(1, Column.STATUS, Status.QUEUED.value)
+    sheets.update_cell.assert_any_call(1, Column.JOB_ID, "uuid-stage")
+    assert all(
+        call.args != (1, Column.NOTIFIED_QUEUED, "TRUE")
+        for call in sheets.update_cell.call_args_list
+    )
+
+
+@patch("coding_agent_bench.intake.poller.send_completed_email")
+@patch("coding_agent_bench.intake.poller.httpx")
+def test_stage_does_not_reconcile_inflight_rows(mock_httpx, mock_email, monkeypatch):
+    """Leave stage jobs non-terminal and avoid completion notifications."""
+    monkeypatch.setenv("ENVIRONMENT", "stage")
+    sheets = MagicMock()
+    sheets.get_all_rows.return_value = [
+        _make_row(STATUS=Status.QUEUED.value, JOB_ID="uuid-stage")
+    ]
+
+    process_rows(sheets, "http://job-queue-service", "test-key", "bench@example.com")
+
+    mock_httpx.get.assert_not_called()
+    mock_email.assert_not_called()
+    sheets.update_cell.assert_not_called()
+
+
+@patch("coding_agent_bench.intake.poller.send_queued_email")
+@patch("coding_agent_bench.intake.poller.httpx")
 def test_invalid_approved_row_marked_needs_review(mock_httpx, mock_email):
     """Mark invalid approved rows for manual review without calling the API."""
     sheets = MagicMock()

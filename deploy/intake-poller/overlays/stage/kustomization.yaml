@@ -10,6 +10,13 @@ images:
 
 patches:
   - target:
+      kind: CronJob
+      name: intake-poller
+    patch: |
+      - op: add
+        path: /spec/suspend
+        value: true
+  - target:
       kind: Secret
       name: intake-poller-secret
     patch: |
