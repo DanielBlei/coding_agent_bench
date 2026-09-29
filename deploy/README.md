@@ -234,9 +234,9 @@ namespace:
 
 ```sh
 oc project <namespace>
-oc apply -f deploy/job-queue/secret.yaml
-oc apply -f deploy/job-queue/nebius-secret.yaml
-oc apply -f deploy/intake-poller/secret.yaml
+oc apply -f deploy/job-queue/base/secret.yaml
+oc apply -f deploy/job-queue/base/nebius-secret.yaml
+oc apply -f deploy/intake-poller/base/secret.yaml
 ```
 
 Repeat these commands for both stage and production. The CI workflow checks for

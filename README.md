@@ -217,8 +217,8 @@ sequenceDiagram
 2. Copy and fill in the Secret templates locally. Do not commit the resulting files:
 
     ```sh
-    cp deploy/job-queue/secret.example.yaml deploy/job-queue/secret.yaml
-    cp deploy/job-queue/nebius-secret.example.yaml deploy/job-queue/nebius-secret.yaml
+    cp deploy/job-queue/base/secret.example.yaml deploy/job-queue/base/secret.yaml
+    cp deploy/job-queue/base/nebius-secret.example.yaml deploy/job-queue/base/nebius-secret.yaml
     ```
 
     If you are not using Nebius, you still need to create the secret, but you can leave the default values and they will be ignored.
@@ -226,13 +226,13 @@ sequenceDiagram
 3. Deploy the MinIO service to store job artifacts:
 
     ```sh
-    oc apply -k deploy/minio -n <project>
+    oc apply -k deploy/minio/overlays/prod -n <project>
     ```
 
 4. Deploy the Job Queue service:
 
     ```sh
-    oc apply -k deploy/job-queue -n <project>
+    oc apply -k deploy/job-queue/overlays/prod -n <project>
     ```
 
 5. Get the route for the deployed API service:
@@ -304,10 +304,10 @@ nebius iam auth-public-key generate \
   --output ~/.nebius/$SA_ID-credentials.json
 ```
 
-Once the service account is created, you can copy and fill in the values in [`deploy/job-queue/nebius-secret.example.yaml`](./deploy/job-queue/nebius-secret.example.yaml):
+Once the service account is created, you can copy and fill in the values in [`deploy/job-queue/base/nebius-secret.example.yaml`](./deploy/job-queue/base/nebius-secret.example.yaml):
 
 ```sh
-cp deploy/job-queue/nebius-secret.example.yaml deploy/job-queue/nebius-secret.yaml
+cp deploy/job-queue/base/nebius-secret.example.yaml deploy/job-queue/base/nebius-secret.yaml
 ```
 
 ```yaml
@@ -345,7 +345,7 @@ cp deploy/intake-poller/secret.example.yaml deploy/intake-poller/secret.yaml
 Then create the CronJob:
 
 ```sh
-oc apply -k deploy/intake-poller -n <project>
+oc apply -k deploy/intake-poller/overlays/prod -n <project>
 ```
 
 ## Harbor Command Examples
@@ -642,7 +642,7 @@ oc project <project>
 Create ServiceAccounts and RoleBindings to run tasks:
 
 ```bash
-oc apply -f deploy/job-queue/harbor-task-sa.yml
+oc apply -f deploy/job-queue/base/harbor-task-sa.yml
 ```
 
 Then in your `harbor` command, add the flag:
@@ -663,14 +663,14 @@ oc project <project>
 Create ServiceAccounts and RoleBindings to run tasks and orchestrate:
 
 ```bash
-oc apply -f deploy/job-queue/task-sa.yml
-oc apply -f deploy/job-queue/orchestrator-sa.yml
+oc apply -f deploy/job-queue/base/task-sa.yml
+oc apply -f deploy/job-queue/base/orchestrator-sa.yml
 ```
 
 Create a MinIO deployment to store your job results:
 
 ```bash
-oc apply -k deploy/minio
+oc apply -k deploy/minio/overlays/prod
 ```
 
 Using the CLI, start a job with the `--remote` flag enabled and set `--environment openshift`, e.g.:
