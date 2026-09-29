@@ -247,17 +247,37 @@ before applying the intake poller. `nebius-secret` is optional.
 
 ### OpenShift setup
 
-Create one namespace for stage and one for production. In each namespace, create
-a deployer ServiceAccount and grant it the permissions needed to create and update
-the resources in these Kustomizations. The account must also be allowed to create
-the `anyuid` RoleBinding used by the job-queue workload, or an administrator must
-apply that binding separately.
+Create one namespace for stage and one for production. In each namespace, create a
+deployer ServiceAccount and grant it namespace-admin permissions. The `admin` role
+is used here because the job-queue Kustomization creates RoleBindings, including the
+`anyuid` RoleBinding. A cluster administrator can replace this with a narrower custom
+role, but it must also permit the required RoleBinding operations.
+
+Run the following once for each namespace (as a namespace administrator):
+
+```sh
+for namespace in <stage-namespace> <production-namespace>; do
+  oc create serviceaccount github-deployer -n "$namespace"
+  oc adm policy add-role-to-user admin -z github-deployer -n "$namespace"
+done
+```
+
+Create a token for each ServiceAccount. The duration is subject to the cluster's
+token policy; omit `--duration` if the cluster rejects the requested duration:
+
+```sh
+oc create token github-deployer -n <stage-namespace> --duration=8760h
+oc create token github-deployer -n <production-namespace> --duration=8760h
+```
+
+Store the two outputs separately as the `OPENSHIFT_TOKEN` secret in the GitHub
+`stage` and `production` environments. Do not use one token for both environments.
 
 The OpenShift service CA and service-serving certificate operators must be
 available. They create `intake-poller-ca` and `job-queue-tls` when the manifests
 are applied. The cluster must also be able to pull the image from GHCR.
 
-Create a token for each environment's deployer ServiceAccount and verify it locally:
+Verify each token locally:
 
 ```sh
 oc login --server=<server> --token=<token>
