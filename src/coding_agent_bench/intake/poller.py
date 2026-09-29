@@ -19,6 +19,7 @@ from coding_agent_bench.intake.notify import (
 )
 from coding_agent_bench.intake.sheets import SheetsClient
 from coding_agent_bench.intake.validation import validate_row
+from coding_agent_bench.utils import is_stage_environment
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +29,6 @@ TERMINAL_STATUSES = {Status.COMPLETED.value, Status.FAILED.value, Status.NEEDS_R
 def _auto_approve_enabled() -> bool:
     """Read auto-approval after dotenv loading while preserving test overrides."""
     return AUTO_APPROVE or os.environ.get("AUTO_APPROVE", "false").lower() == "true"
-
-
-def _is_stage_environment() -> bool:
-    """Return whether the poller is running as a non-notifying stage test."""
-    environment = os.environ.get("ENVIRONMENT", "").lower()
-    if environment not in {"prod", "stage"}:
-        raise ValueError("ENVIRONMENT must be set to either 'prod' or 'stage'")
-    return environment == "stage"
 
 
 def _queue_verify() -> str | bool:
@@ -117,7 +110,7 @@ def process_rows(
     sender_email: str,
 ) -> None:
     """Process approved, in-flight, and pending-notification spreadsheet rows."""
-    stage = _is_stage_environment()
+    stage = is_stage_environment()
     rows = sheets.get_all_rows()
 
     for i, row in enumerate(rows):
