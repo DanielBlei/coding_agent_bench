@@ -3,6 +3,7 @@ models.json
 config.toml
 data
 jobs.db
+deploy/minio/base/secret.yaml
 deploy/job-queue/base/secret.yaml
 deploy/job-queue/base/nebius-secret.yaml
 deploy/intake-poller/base/secret.yaml
