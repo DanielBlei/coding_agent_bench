@@ -262,6 +262,27 @@ for namespace in <stage-namespace> <production-namespace>; do
 done
 ```
 
+The deployment workflow reads the application Secrets before applying the
+Kustomizations. If the cluster's `admin` role does not grant the ServiceAccount
+Secret access, create and bind a dedicated read role in each namespace:
+
+```sh
+for namespace in <stage-namespace> <production-namespace>; do
+  oc create role github-deployer-secret-reader \
+    --verb=get --verb=list --resource=secrets \
+    -n "$namespace"
+  oc adm policy add-role-to-user github-deployer-secret-reader \
+    -z github-deployer -n "$namespace"
+done
+```
+
+Verify the permission with the same identity used by CI:
+
+```sh
+oc auth can-i get secret/job-queue-secret \
+  --as=system:serviceaccount:<namespace>:github-deployer -n <namespace>
+```
+
 Create a token for each ServiceAccount. The duration is subject to the cluster's
 token policy; omit `--duration` if the cluster rejects the requested duration:
 
