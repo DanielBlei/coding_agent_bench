@@ -7,6 +7,8 @@ metadata:
   name: harbor-minio
 spec:
   replicas: 1
+  strategy: 
+    type: Recreate
   selector:
     matchLabels:
       app: harbor-minio
