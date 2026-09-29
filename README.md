@@ -219,10 +219,7 @@ sequenceDiagram
     ```sh
     cp deploy/minio/base/secret.example.yaml deploy/minio/base/secret.yaml
     cp deploy/job-queue/base/secret.example.yaml deploy/job-queue/base/secret.yaml
-    cp deploy/job-queue/base/nebius-secret.example.yaml deploy/job-queue/base/nebius-secret.yaml
     ```
-
-    If you are not using Nebius, you still need to create the secret, but you can leave the default values and they will be ignored.
 
     Apply the Secrets separately to the target project before deploying the services:
 
@@ -348,7 +345,7 @@ You can read more about this service in the [intake poller docs](./deploy/README
 First, copy the secret in [`deploy/intake-poller/secret.example.yaml`](./deploy/intake-poller/secret.example.yaml), fill in the values according to the [intake poller docs](./deploy/README.md#intake-poller), and apply it separately. Do not commit this file.
 
 ```sh
-cp deploy/intake-poller/secret.example.yaml deploy/intake-poller/secret.yaml 
+cp deploy/intake-poller/base/secret.example.yaml deploy/intake-poller/base/secret.yaml 
 oc apply -f deploy/intake-poller/base/secret.yaml -n <project>
 ```
 
