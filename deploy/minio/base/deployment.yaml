@@ -27,6 +27,9 @@ spec:
         - /data
         - --console-address
         - :9001
+        env:
+        - name: ENVIRONMENT
+          value: stage
         envFrom:
         - secretRef:
             name: harbor-minio

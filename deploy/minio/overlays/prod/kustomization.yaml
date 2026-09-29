@@ -6,9 +6,9 @@ resources:
 
 patches:
   - target:
-      kind: Secret
+      kind: Deployment
       name: harbor-minio
     patch: |
       - op: replace
-        path: /stringData/ENVIRONMENT
+        path: /spec/template/spec/containers/0/env/0/value
         value: prod

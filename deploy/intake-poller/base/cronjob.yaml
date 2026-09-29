@@ -21,7 +21,7 @@ spec:
           restartPolicy: Never
           containers:
           - name: poller
-            image: ghcr.io/redhat-et/coding_agent_bench:v0.2.6
+            image: ghcr.io/redhat-et/coding_agent_bench:tag
             imagePullPolicy: Always
             # Run the venv's Python directly. `uv run` re-syncs the project into
             # /app/.venv and writes a cache under $HOME at startup, both of which
@@ -29,6 +29,8 @@ spec:
             # owned by 1001). The package is already installed in the image.
             command: ["/app/.venv/bin/python", "-m", "coding_agent_bench.intake.poller"]
             env:
+            - name: ENVIRONMENT
+              value: stage
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: /etc/google/service-account.json
             - name: SMTP_HOST

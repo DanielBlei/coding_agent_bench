@@ -10,9 +10,9 @@ images:
 
 patches:
   - target:
-      kind: Secret
-      name: job-queue-secret
+      kind: Deployment
+      name: job-queue
     patch: |
       - op: replace
-        path: /stringData/ENVIRONMENT
+        path: /spec/template/spec/containers/0/env/0/value
         value: prod

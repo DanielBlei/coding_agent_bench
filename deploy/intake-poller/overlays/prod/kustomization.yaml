@@ -10,9 +10,9 @@ images:
 
 patches:
   - target:
-      kind: Secret
-      name: intake-poller-secret
+      kind: CronJob
+      name: intake-poller
     patch: |
       - op: replace
-        path: /stringData/ENVIRONMENT
+        path: /spec/jobTemplate/spec/template/spec/containers/0/env/0/value
         value: prod
