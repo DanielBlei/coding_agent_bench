@@ -643,7 +643,7 @@ oc project <project>
 Create ServiceAccounts and RoleBindings to run tasks:
 
 ```bash
-oc apply -f deploy/job-queue/base/harbor-task-sa.yml
+oc apply -f deploy/job-queue/base/harbor-task-sa.yaml
 ```
 
 Then in your `harbor` command, add the flag:
@@ -664,8 +664,8 @@ oc project <project>
 Create ServiceAccounts and RoleBindings to run tasks and orchestrate:
 
 ```bash
-oc apply -f deploy/job-queue/base/task-sa.yml
-oc apply -f deploy/job-queue/base/orchestrator-sa.yml
+oc apply -f deploy/job-queue/base/task-sa.yaml
+oc apply -f deploy/job-queue/base/orchestrator-sa.yaml
 ```
 
 Copy the MinIO secret and fill in the values:
