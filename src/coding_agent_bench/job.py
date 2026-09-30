@@ -127,7 +127,7 @@ class OpenshiftJob:
                     "name": "OPENROUTER_API_KEY",
                     "valueFrom": {
                         "secretKeyRef": {
-                            "name": "openrouter-api-key",
+                            "name": "job-queue-secret",
                             "key": "OPENROUTER_API_KEY",
                             "optional": True,
                         }

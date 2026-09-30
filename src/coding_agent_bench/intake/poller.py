@@ -19,6 +19,7 @@ from coding_agent_bench.intake.notify import (
 )
 from coding_agent_bench.intake.sheets import SheetsClient
 from coding_agent_bench.intake.validation import validate_row
+from coding_agent_bench.utils import is_stage_environment
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,7 @@ def process_rows(
     sender_email: str,
 ) -> None:
     """Process approved, in-flight, and pending-notification spreadsheet rows."""
+    stage = is_stage_environment()
     rows = sheets.get_all_rows()
 
     for i, row in enumerate(rows):
@@ -120,7 +122,7 @@ def process_rows(
             if status in TERMINAL_STATUSES:
                 # Completed/failed rows remain eligible for one retry when the
                 # queue state was persisted but the notification was not.
-                if status in (Status.COMPLETED.value, Status.FAILED.value) and (
+                if not stage and status in (Status.COMPLETED.value, Status.FAILED.value) and (
                     row[Column.NOTIFIED_DONE].strip().upper() != "TRUE"
                 ):
                     _handle_inflight_row(
@@ -132,9 +134,9 @@ def process_rows(
             if status == Status.APPROVED.value or (not status and _auto_approve_enabled()):
                 _handle_new_row(
                     sheets, row, row_num, api_base_url, api_key,
-                    sender_email,
+                    sender_email, notify=not stage,
                 )
-            elif status in (Status.QUEUED.value, Status.RUNNING.value):
+            elif not stage and status in (Status.QUEUED.value, Status.RUNNING.value):
                 _handle_inflight_row(
                     sheets, row, row_num, api_base_url, api_key,
                     sender_email,
@@ -150,6 +152,7 @@ def _handle_new_row(
     api_base_url: str,
     api_key: str,
     sender_email: str,
+    notify: bool = True,
 ) -> None:
     """Validate and submit one approved intake row, then notify its submitter."""
     agent = row[Column.AGENT].strip()
@@ -192,11 +195,12 @@ def _handle_new_row(
     sheets.update_cell(row_num, Column.JOB_ID, job_id)
     sheets.update_cell(row_num, Column.STATUS, Status.QUEUED.value)
 
-    try:
-        send_queued_email(email, agent, dataset, model_name, job_id, sender_email)
-        sheets.update_cell(row_num, Column.NOTIFIED_QUEUED, "TRUE")
-    except Exception:
-        logger.exception("Failed to send queued email for row %d", row_num)
+    if notify:
+        try:
+            send_queued_email(email, agent, dataset, model_name, job_id, sender_email)
+            sheets.update_cell(row_num, Column.NOTIFIED_QUEUED, "TRUE")
+        except Exception:
+            logger.exception("Failed to send queued email for row %d", row_num)
 
 
 def _handle_inflight_row(

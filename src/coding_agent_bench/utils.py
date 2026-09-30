@@ -1,3 +1,4 @@
+import os
 import shlex
 from pathlib import Path
 
@@ -23,3 +24,11 @@ def validate_remote_skill_sources(skills: list[str] | None) -> None:
                 "Use org/name[@ref] or an HTTP(S) Git URL; local paths are "
                 "only supported for locally orchestrated runs."
             ) from exc
+
+
+def is_stage_environment() -> bool:
+    """Return True if the application is running in stage environment."""
+    environment = os.environ.get("ENVIRONMENT", "").lower()
+    if environment not in {"prod", "stage"}:
+        raise ValueError("ENVIRONMENT must be set to either 'prod' or 'stage'")
+    return environment == "stage"

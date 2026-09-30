@@ -179,14 +179,19 @@ development.
 | `JOB_QUEUE_URL` | HTTPS URL for the queue API. Use the cluster's TLS/mTLS endpoint; the poller fails closed instead of using plaintext HTTP. |
 | `SENDER_EMAIL` | Address notification emails are sent from. Set it to `ace-model-evals@redhat.com`. |
 | `AUTO_APPROVE` | `"true"` to auto-submit rows with a blank status, otherwise `"false"` |
+| `SMTP_HOST` | Host for the SMTP server to send notifications through |
+| `SMTP_PORT` | Port for the SMTP server to send notifications through |
+| `SMTP_STARTTLS` | Set to `"true"` when the server requires STARTTLS, otherwise `"false"` |
+| `ALLOW_INSECURE_QUEUE_HTTP` | Set to `"true"` when the queue is served over HTTP (e.g. locally), otherwise `"false"` |
+| `service-account.json` | Content of a GCP service account that has read access to the Google Sheet. |
 
 ### Queue TLS
 
-`deploy/job-queue-service.yml` enables OpenShift's service-serving certificate
+`deploy/job-queue/deployment.yaml` enables OpenShift's service-serving certificate
 operator with the `service.beta.openshift.io/serving-cert-secret-name`
 annotation. The operator creates `job-queue-tls` with `tls.crt`, `tls.key`, and
 the service CA; the queue mounts that Secret and Uvicorn serves HTTPS on port
-8443. The Service exposes it as port 443 and the Route uses `reencrypt`
+1.    The Service exposes it as port 443 and the Route uses `reencrypt`
 termination, keeping router-to-pod traffic encrypted as well. Apply the
 manifest before starting the poller and wait for `job-queue-tls` to be created.
 
@@ -199,21 +204,6 @@ resource token such as `nebius-h200` (or `nebius-b200x8`). The queue service
 validates that token, provisions the instance, and supplies its endpoint after
 approval; the requester never needs to know that endpoint.
 
-**`intake-poller-google-sa`** — the Google service-account credential mounted
-at `/etc/google/service-account.json` for Sheets access. Notification email is
-sent through the internal SMTP relay, so no Gmail mailbox credential or
-domain-wide delegation is required.
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: intake-poller-google-sa
-type: Opaque
-stringData:
-  service-account.json: <sa-file-content>
-```
-
 The CronJob sends notifications through `smtp.corp.redhat.com` on port 25.
 Set `SMTP_HOST` and `SMTP_PORT` on the poller when a different internal relay
 is required. Set `SMTP_STARTTLS=true` when that relay requires STARTTLS. The
@@ -222,3 +212,122 @@ configured `SENDER_EMAIL` must be an address permitted by the relay.
 Each submitted Queue row carries a deterministic idempotency key. If the
 CronJob is retried after a network timeout, the queue API returns the original
 job instead of creating a duplicate.
+
+## GitHub Actions Deployment
+
+`.github/workflows/deploy.yml` deploys both Kustomize applications with
+`oc`:
+
+- A merged pull request targeting `stage` deploys to `STAGE_NAMESPACE`.
+- A version tag such as `v0.3.0` deploys to `PROD_NAMESPACE`.
+
+The workflow expects the Secrets to already exist in the target namespace. It
+only verifies them and applies the two Kustomizations. The files below are safe
+templates for local reference only; fill them in locally and do not commit them:
+
+- `deploy/minio/base/secret.example.yaml`
+- `deploy/job-queue/base/secret.example.yaml`
+- `deploy/job-queue/base/nebius-secret.example.yaml`
+- `deploy/intake-poller/base/secret.example.yaml`
+
+Before the first CI deployment, apply the filled-in templates to each target
+namespace:
+
+```sh
+oc project <namespace>
+oc apply -f deploy/minio/base/secret.yaml
+oc apply -f deploy/job-queue/base/secret.yaml
+oc apply -f deploy/job-queue/base/nebius-secret.yaml
+oc apply -f deploy/intake-poller/base/secret.yaml
+```
+
+Repeat these commands for both stage and production. The CI workflow checks for
+`job-queue-secret` before applying anything. It also checks for `intake-poller-secret` 
+before applying the intake poller. `nebius-secret` is optional.
+
+### OpenShift setup
+
+Create one namespace for stage and one for production. In each namespace, create a
+deployer ServiceAccount and grant it namespace-admin permissions. The `admin` role
+is used here because the job-queue Kustomization creates RoleBindings, including the
+`anyuid` RoleBinding. A cluster administrator can replace this with a narrower custom
+role, but it must also permit the required RoleBinding operations.
+
+Run the following once for each namespace (as a namespace administrator):
+
+```sh
+for namespace in <stage-namespace> <production-namespace>; do
+  oc create serviceaccount github-deployer -n "$namespace"
+  oc adm policy add-role-to-user admin -z github-deployer -n "$namespace"
+done
+```
+
+The deployment workflow reads the application Secrets before applying the
+Kustomizations. If the cluster's `admin` role does not grant the ServiceAccount
+Secret access, create and bind a dedicated read role in each namespace:
+
+```sh
+for namespace in <stage-namespace> <production-namespace>; do
+  oc create role github-deployer-secret-reader \
+    --verb=get --verb=list --resource=secrets \
+    -n "$namespace"
+  oc adm policy add-role-to-user github-deployer-secret-reader \
+    -z github-deployer -n "$namespace"
+done
+```
+
+Verify the permission with the same identity used by CI:
+
+```sh
+oc auth can-i get secret/job-queue-secret \
+  --as=system:serviceaccount:<namespace>:github-deployer -n <namespace>
+```
+
+Create a token for each ServiceAccount. The duration is subject to the cluster's
+token policy; omit `--duration` if the cluster rejects the requested duration:
+
+```sh
+oc create token github-deployer -n <stage-namespace> --duration=8760h
+oc create token github-deployer -n <production-namespace> --duration=8760h
+```
+
+Store the two outputs separately as the `OPENSHIFT_TOKEN` secret in the GitHub
+`stage` and `production` environments. Do not use one token for both environments.
+
+The OpenShift service CA and service-serving certificate operators must be
+available. They create `intake-poller-ca` and `job-queue-tls` when the manifests
+are applied. The cluster must also be able to pull the image from GHCR.
+
+Verify each token locally:
+
+```sh
+oc login --server=<server> --token=<token>
+oc project <namespace>
+oc auth can-i create deployments
+oc auth can-i create rolebindings
+```
+
+### GitHub setup
+
+Create GitHub repository variables:
+
+| Variable | Value |
+|----------|-------|
+| `STAGE_NAMESPACE` | OpenShift stage namespace |
+| `PROD_NAMESPACE` | OpenShift production namespace |
+
+Create GitHub Environments named `stage` and `production`. Add the OpenShift
+connection secrets to both environments, using environment-specific values.
+Production can also require an approval reviewer:
+
+| Secret | Purpose |
+|--------|---------|
+| `OPENSHIFT_SERVER` | OpenShift API URL |
+| `OPENSHIFT_TOKEN` | Token for the namespace deployer ServiceAccount |
+
+The application secrets listed in the example files are not GitHub secrets. They
+are applied directly to OpenShift before deployment.
+
+The workflow uses the `stage` environment for merged `STAGE` pull requests and
+the `production` environment for `v*` tags. It does not run for an unmerged pull
+request or for ordinary branch pushes.

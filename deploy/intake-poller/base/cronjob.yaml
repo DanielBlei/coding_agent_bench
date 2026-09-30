@@ -1,17 +1,3 @@
----
-# The service-ca operator injects the service-serving CA into this ConfigMap
-# (populating the service-ca.crt key) because of the inject-cabundle annotation.
-# Declaring it here keeps the manifest self-contained: the operator only
-# populates an existing ConfigMap, it does not create a missing one.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: intake-poller-ca
-  labels:
-    app: intake-poller
-  annotations:
-    service.beta.openshift.io/inject-cabundle: "true"
----
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -35,7 +21,7 @@ spec:
           restartPolicy: Never
           containers:
           - name: poller
-            image: ghcr.io/redhat-et/coding_agent_bench:v0.2.6
+            image: ghcr.io/redhat-et/coding_agent_bench:tag
             imagePullPolicy: Always
             # Run the venv's Python directly. `uv run` re-syncs the project into
             # /app/.venv and writes a cache under $HOME at startup, both of which
@@ -43,12 +29,25 @@ spec:
             # owned by 1001). The package is already installed in the image.
             command: ["/app/.venv/bin/python", "-m", "coding_agent_bench.intake.poller"]
             env:
+            - name: ENVIRONMENT
+              value: stage
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: /etc/google/service-account.json
             - name: SMTP_HOST
-              value: smtp.corp.redhat.com
+              valueFrom:
+                secretKeyRef:
+                  name: intake-poller-secret
+                  key: SMTP_HOST
             - name: SMTP_PORT
-              value: "25"
+              valueFrom:
+                secretKeyRef:
+                  name: intake-poller-secret
+                  key: SMTP_PORT
+            - name: SMTP_STARTTLS
+              valueFrom:
+                secretKeyRef:
+                  name: intake-poller-secret
+                  key: SMTP_STARTTLS
             - name: GOOGLE_SHEET_ID
               valueFrom:
                 secretKeyRef:
@@ -74,6 +73,11 @@ spec:
                 secretKeyRef:
                   name: intake-poller-secret
                   key: AUTO_APPROVE
+            - name: ALLOW_INSECURE_QUEUE_HTTP
+              valueFrom:
+                secretKeyRef:
+                  name: intake-poller-secret
+                  key: ALLOW_INSECURE_QUEUE_HTTP
             # The queue is reached over its in-cluster service address, which
             # presents an OpenShift service-serving cert. Trust its CA (injected
             # into the mounted ConfigMap) so TLS verification succeeds.
@@ -104,7 +108,10 @@ spec:
           volumes:
           - name: google-sa-key
             secret:
-              secretName: intake-poller-google-sa
+              secretName: intake-poller-secret
+              items:
+                - key: service-account.json
+                  path: service-account.json
           - name: service-ca
             configMap:
               name: intake-poller-ca
