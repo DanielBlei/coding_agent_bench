@@ -1142,6 +1142,8 @@ async def _pause_commit(job_id: str, oj: OpenshiftJob) -> bool:
     A timeout, failed upload, or missing parent leaves the row pausing and
     retains local artifacts. The successful-upload bit survives a queue crash
     between deleting the parent and committing the paused row.
+    A legacy parent without cooperative pause is failed without cleanup so
+    operators can recover its local artifacts without automatic retries.
     """
     row = job_store.get(job_id)
     if not row or row["status"] != JobStatus.PAUSING.value:
@@ -1192,9 +1194,9 @@ async def _pause_commit(job_id: str, oj: OpenshiftJob) -> bool:
                 "cooperative pause support; parent retained for manual recovery"
             )
             job_store.update_status_if(
-                job_id, JobStatus.PAUSING, JobStatus.PAUSING, error=error
+                job_id, JobStatus.PAUSING, JobStatus.FAILED, error=error
             )
-            return False
+            return True
         if not checkpointed:
             job_store.update_status_if(
                 job_id, JobStatus.PAUSING, JobStatus.PAUSING,

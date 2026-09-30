@@ -476,9 +476,9 @@ def test_legacy_parent_without_cooperative_pause_retains_local_results(monkeypat
     monkeypatch.setattr(api, "job_store", store)
     monkeypatch.setattr(api, "_best_effort_cleanup", cleanup)
 
-    assert asyncio.run(api._pause_commit("jid", oj)) is False
+    assert asyncio.run(api._pause_commit("jid", oj)) is True
 
-    assert store.row["status"] == "pausing"
+    assert store.row["status"] == "failed"
     assert store.row.get("pause_checkpointed", 0) == 0
     assert "checkpoint unconfirmed" in store.row["error"]
     assert "predates cooperative pause support" in store.row["error"]
@@ -486,6 +486,58 @@ def test_legacy_parent_without_cooperative_pause_retains_local_results(monkeypat
     assert cleanups == []
     assert oj.deleted == 0
     assert not store.pause_commits
+
+
+def test_legacy_pause_failure_survives_restart_without_retrying(tmp_path, monkeypatch):
+    from coding_agent_bench import api
+
+    store = api.JobStore(tmp_path / "jobs.db")
+    command = ["harbor", "run"]
+    store.insert("legacy", "benchmark", "pi", "dataset", "model", "nebius-b200", command)
+    store.update_status("legacy", api.JobStatus.PAUSING)
+    monkeypatch.setattr(api, "job_store", store)
+
+    class LegacyJob(FlowJob):
+        async def request_pause(self, reason, wait_seconds=600):
+            self.pauses.append(reason)
+            raise RuntimeError("Parent pod predates cooperative pause support")
+
+    job = LegacyJob(job=running_job())
+    asyncio.run(api._retry_pause_finalize("legacy", job))
+
+    restarted = api.JobStore(store._db_path)
+    row = restarted.get("legacy")
+    assert row["status"] == "failed"
+    assert row["pause_checkpointed"] == 0
+    assert row["preempt_attempts"] == 0
+    assert json.loads(row["command"]) == command
+    assert "parent retained for manual recovery" in row["error"]
+    assert restarted.list_pausing() == []
+    assert restarted.list_paused() == []
+    assert restarted.list_recoverable() == []
+
+    monkeypatch.setattr(api, "job_store", restarted)
+    asyncio.run(api._retry_pause_finalize("legacy", job))
+    assert len(job.pauses) == 1
+    assert job.deleted == 0
+
+
+def test_legacy_pause_failure_cannot_overwrite_concurrent_cancellation(monkeypatch):
+    from coding_agent_bench import api
+
+    store = FlowStore({"job_id": "legacy", "status": "pausing", "error": "preempted"})
+    monkeypatch.setattr(api, "job_store", store)
+
+    class LegacyJob(FlowJob):
+        async def request_pause(self, reason, wait_seconds=600):
+            store.update_status("legacy", api.JobStatus.CANCELLING, error="User cancelled")
+            raise RuntimeError("Parent pod predates cooperative pause support")
+
+    job = LegacyJob(job=running_job())
+    assert asyncio.run(api._pause_commit("legacy", job)) is True
+    assert store.row["status"] == "cancelling"
+    assert store.row["error"] == "User cancelled"
+    assert job.deleted == 0
 
 
 def test_checkpoint_proof_survives_restart_after_parent_deletion(monkeypatch):

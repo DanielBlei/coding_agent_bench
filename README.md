@@ -307,8 +307,9 @@ OpenShift confirms its parent Job is absent or terminally failed and its checkpo
 unconfirmed. Cancellation is queued for workload cleanup and survives service
 restarts; it does not mark the checkpoint as usable. Jobs with live parents,
 or whose checkpoints are being finalized, remain protected from this path.
-Legacy parents without cooperative-pause support remain in `pausing` and are
-retained for manual recovery rather than deleting unuploaded local results.
+Jobs with legacy parents without cooperative-pause support are marked `failed`
+with a checkpoint-unconfirmed error, stopping automatic retries. Their parents
+and unuploaded local results are retained for manual recovery.
 
 Paused-job recovery attempts are scheduled through the serial worker even while
 other jobs are running. Recovery does not compete with an active job for the
