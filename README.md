@@ -287,6 +287,40 @@ Cancel a running or queued job:
 curl -X DELETE $JOB_QUEUE_URL/jobs/<job_id> -H "X-API-Key: <your-api-key>"
 ```
 
+#### Resume snapshots in MinIO
+
+Resumed jobs keep recovery snapshots under
+`s3://results-staging/<original-job-name>/<attempt>/` before syncing updated
+artifacts to `s3://results/<original-job-name>/`.
+
+After a successful resume and sync, manifest-owned staging objects for that job are removed
+only when Harbor reports every trial completed, with no pending, running,
+cancelled, or errored trials, and the current pod has no pause request. Paused,
+failed, or incompletely synced runs retain their snapshots. A cleanup failure is
+logged without failing the completed benchmark. Each new snapshot marker records
+the exact job, attempt, and uploaded file names. Cleanup deletes only those keys,
+so nested job names and unrelated objects remain intact. Legacy snapshots without
+ownership manifests are retained. If deletion partially fails, its manifest stays
+available for a later cleanup attempt.
+
+A job stuck in `pausing` can be cancelled through `DELETE /jobs/<job_id>` when
+OpenShift confirms its parent Job is absent or terminally failed and its checkpoint is still
+unconfirmed. Cancellation is queued for workload cleanup and survives service
+restarts; it does not mark the checkpoint as usable. Jobs with live parents,
+or whose checkpoints are being finalized, remain protected from this path.
+Jobs with legacy parents without cooperative-pause support are marked `failed`
+with a checkpoint-unconfirmed error, stopping automatic retries. Their parents
+and unuploaded local results are retained for manual recovery.
+
+Paused-job recovery attempts are scheduled through the serial worker even while
+other jobs are running. Recovery does not compete with an active job for the
+shared Nebius instance, and a failed attempt leaves the job paused for a later retry.
+
+The stage and production deployment overlays set `CODING_AGENT_BENCH_IMAGE` to
+the queue's own image so benchmark and resume workers use matching code. When
+running a custom queue image outside these overlays, set this variable to the
+same image reference.
+
 ### (Optional) Connect to Nebius
 
 The queue service supports starting and stopping vLLM server instances automatically using [Nebius](https://nebius.com/).

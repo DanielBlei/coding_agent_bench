@@ -140,6 +140,10 @@ class HarborCommandBuilder:
 
         # Execute the job
         cmd = ["harbor", "run", "--debug", *args]
+        if os.environ.get("CAB_PAUSE_REQUEST_PATH"):
+            from coding_agent_bench.preemption import PAUSE_PLUGIN
+
+            cmd += ["--plugin", PAUSE_PLUGIN]
 
         return cmd
 
