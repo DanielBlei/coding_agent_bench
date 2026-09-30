@@ -2,12 +2,12 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   labels:
-    app: harbor-minio
-    component: minio
-  name: harbor-minio
+    app: harbor-storage
+    component: rustfs
+  name: harbor-storage
 spec:
   accessModes:
-  - ReadWriteOnce
+    - ReadWriteOnce
   resources:
     requests:
       storage: 400Gi
