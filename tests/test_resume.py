@@ -335,9 +335,6 @@ def test_manual_resume_wins_while_automatic_recovery_is_waiting(store, monkeypat
     store.insert("paused", "benchmark", "oracle", "dataset", "model", "nebius-h200", [])
     store.update_status("paused", api.JobStatus.PAUSED)
 
-    class StopLoop(Exception):
-        pass
-
     class Nebius:
         def has_busy_instance(self):
             return False
@@ -348,23 +345,42 @@ def test_manual_resume_wins_while_automatic_recovery_is_waiting(store, monkeypat
         async def recover_stopped_instance(self, _name):
             await api.resume_job("paused", api.ResumeJobRequest(server_url="https://manual.example.com"))
 
-    sleeps = 0
-
-    async def sleep(_seconds):
-        nonlocal sleeps
-        sleeps += 1
-        if sleeps > 1:
-            raise StopLoop
-
     monkeypatch.setattr(api, "_nebius", Nebius())
     monkeypatch.setattr(api, "_active_job", None)
     monkeypatch.setattr(api, "_shutting_down", False)
-    monkeypatch.setattr(api.asyncio, "sleep", sleep)
-    with pytest.raises(StopLoop):
-        asyncio.run(api._resume_paused_jobs_loop())
+    asyncio.run(api._process_queued_job(api.QueuedJob("paused", [], "nebius-h200", "model", True)))
     assert len(api._job_queue) == 1
     assert api._job_queue[0].server_url == "https://manual.example.com"
     assert store.get("paused")["server_url"] == "https://manual.example.com"
+
+
+def test_scheduled_recovery_uses_newer_manual_resume_settings(store, monkeypatch):
+    store.insert("paused", "benchmark", "oracle", "dataset", "model", "nebius-h200", [])
+    store.update_status("paused", api.JobStatus.PAUSED)
+    stale = api.QueuedJob("paused", [], "nebius-h200", "model", True)
+    asyncio.run(api.resume_job("paused", api.ResumeJobRequest(
+        server_url="https://manual.example.com", filter_error_types=["RuntimeError"],
+    )))
+
+    class Job:
+        async def _get_job(self):
+            return None
+
+    ran = []
+
+    async def run_job(job_id, command, **kwargs):
+        ran.append((command, kwargs))
+
+    monkeypatch.setattr(api, "OpenshiftJob", lambda **_kwargs: Job())
+    monkeypatch.setattr(api, "_run_job", run_job)
+    asyncio.run(api._process_queued_job(stale))
+
+    assert len(ran) == 1
+    command, kwargs = ran[0]
+    assert "-f RuntimeError" in command[2]
+    assert "https://manual.example.com" in command[2]
+    assert kwargs["server_url"] == "https://manual.example.com"
+    assert kwargs["adopt_existing"] is False
 
 
 @pytest.mark.parametrize("legacy", [False, True])

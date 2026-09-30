@@ -452,6 +452,42 @@ def test_unconfirmed_checkpoint_is_never_deleted_or_parked(monkeypatch, job):
     assert store.row["status"] == "pausing"
 
 
+def test_legacy_parent_without_cooperative_pause_retains_local_results(monkeypatch):
+    from coding_agent_bench import api
+
+    store = FlowStore({
+        "job_id": "jid", "job_name": "job-a", "status": "pausing",
+        "server_url": "nebius-b200", "preempt_attempts": 0, "error": "preempted",
+    })
+
+    class LegacyJob(FlowJob):
+        async def request_pause(self, reason, wait_seconds=600):
+            raise RuntimeError(
+                "Parent pod predates cooperative pause support; retaining it for manual recovery"
+            )
+
+    oj = LegacyJob(job=running_job())
+    cleanups = []
+
+    async def cleanup(job):
+        cleanups.append(job)
+        return None
+
+    monkeypatch.setattr(api, "job_store", store)
+    monkeypatch.setattr(api, "_best_effort_cleanup", cleanup)
+
+    assert asyncio.run(api._pause_commit("jid", oj)) is False
+
+    assert store.row["status"] == "pausing"
+    assert store.row.get("pause_checkpointed", 0) == 0
+    assert "checkpoint unconfirmed" in store.row["error"]
+    assert "predates cooperative pause support" in store.row["error"]
+    assert "parent retained for manual recovery" in store.row["error"]
+    assert cleanups == []
+    assert oj.deleted == 0
+    assert not store.pause_commits
+
+
 def test_checkpoint_proof_survives_restart_after_parent_deletion(monkeypatch):
     from coding_agent_bench import api
 
@@ -654,106 +690,88 @@ def run_recovery_loop(monkeypatch, nebius, store, passes=1, active=None):
     return queue
 
 
-def test_recovery_loop_flips_paused_job_after_stabilizing(monkeypatch):
+def run_paused_recovery(monkeypatch, nebius, store):
+    from coding_agent_bench import api
+
+    monkeypatch.setattr(api, "_nebius", nebius)
+    monkeypatch.setattr(api, "job_store", store)
+    return asyncio.run(api._recover_paused_job(store.list_paused()[0]))
+
+
+def test_worker_recovery_flips_paused_job_after_stabilizing(monkeypatch):
 
     nebius = LoopNebius()
     store = LoopStore([paused_row()])
-    queue = run_recovery_loop(monkeypatch, nebius, store)
+    assert run_paused_recovery(monkeypatch, nebius, store)
 
     assert nebius.recovered == ["inst-0"]
     assert store.status_updates
     job_id, status, error = store.status_updates[0]
     assert (job_id, status) == ("p1", "queued")
     assert "resuming" in error
-    # DB flip alone is not dispatch: the worker drains _job_queue only
-    assert len(queue) == 1
-    assert queue[0].job_id == "p1"
-    assert queue[0].command == ["bash", "-c", "resume-cmd"]
 
 
-def test_recovery_loop_processes_one_retained_pause_per_pass(monkeypatch):
-    from coding_agent_bench import api
-
+def test_recovery_loop_schedules_one_retained_pause_per_pass(monkeypatch):
     pending = [
-        {"job_id": f"p{index}", "status": "pausing"}
+        {**paused_row(), "job_id": f"p{index}", "status": "pausing"}
         for index in range(1, 4)
     ]
     store = LoopStore(pending)
-    attempted = []
+    queue = run_recovery_loop(monkeypatch, LoopNebius(), store, passes=2)
 
-    async def finish_pause(job_id, _job):
-        attempted.append(job_id)
-        store._apply(job_id, "failed", "still retained")
-
-    monkeypatch.setattr(api, "_pause_commit", finish_pause)
-    run_recovery_loop(monkeypatch, LoopNebius(), store, passes=2)
-
-    assert attempted == ["p1", "p2"]
+    assert [job.job_id for job in queue] == ["p1", "p2"]
+    assert all(job.adopt_existing for job in queue)
     assert next(row for row in store._rows if row["job_id"] == "p3")["status"] == "pausing"
 
 
 def test_recovery_loop_rotates_past_unconfirmed_checkpoints(monkeypatch):
-    from coding_agent_bench import api
-
     store = LoopStore([
-        {"job_id": "blocked", "status": "pausing"},
-        {"job_id": "later", "status": "pausing"},
+        {**paused_row(), "job_id": "blocked", "status": "pausing"},
+        {**paused_row(), "job_id": "later", "status": "pausing"},
         paused_row(),
     ])
-    attempted = []
-
-    async def retain_checkpoint(job_id, _job):
-        attempted.append(job_id)
-        return False  # Both rows remain pausing across all recovery passes.
-
-    monkeypatch.setattr(api, "_pause_commit", retain_checkpoint)
     queue = run_recovery_loop(monkeypatch, LoopNebius(), store, passes=3)
 
-    assert attempted == ["blocked", "later", "blocked"]
     assert [row["job_id"] for row in store.list_pausing()] == ["blocked", "later"]
-    assert [job.job_id for job in queue] == ["p1"]
+    assert [job.job_id for job in queue] == ["blocked", "p1", "later"]
 
 
-def test_recovery_loop_stays_paused_when_nebius_unavailable(monkeypatch):
+def test_worker_recovery_stays_paused_when_nebius_unavailable(monkeypatch):
 
     store = LoopStore([paused_row()])
-    queue = run_recovery_loop(monkeypatch, LoopNebius(recover_error=RuntimeError("capacity")), store)
+    assert not run_paused_recovery(monkeypatch, LoopNebius(recover_error=RuntimeError("capacity")), store)
 
     assert store.status_updates == []
-    assert queue == []
 
 
-def test_recovery_loop_defers_to_running_jobs(monkeypatch):
+def test_worker_recovery_defers_to_busy_instance(monkeypatch):
 
     nebius = LoopNebius(busy=True)
     store = LoopStore([paused_row()])
-    queue = run_recovery_loop(monkeypatch, nebius, store)
+    assert not run_paused_recovery(monkeypatch, nebius, store)
 
     assert store.status_updates == []
     assert nebius.recovered == []
-    assert queue == []
 
 
-def test_recovery_loop_requeues_when_instance_is_gone(monkeypatch):
+def test_worker_recovery_requeues_when_instance_is_gone(monkeypatch):
 
     nebius = LoopNebius(adopt=None)
     store = LoopStore([paused_row()])
-    queue = run_recovery_loop(monkeypatch, nebius, store)
+    assert run_paused_recovery(monkeypatch, nebius, store)
 
     assert nebius.recovered == []  # full re-provisioning deferred to the worker
     assert store.status_updates and store.status_updates[0][1] == "queued"
-    assert len(queue) == 1 and queue[0].job_id == "p1"
 
 
-def test_recovery_loop_requeues_row_without_nebius_url(monkeypatch):
+def test_worker_recovery_requeues_row_without_nebius_url(monkeypatch):
     store = LoopStore([{**paused_row(), "server_url": "http://model.example:8000"}])
-    queue = run_recovery_loop(monkeypatch, LoopNebius(), store)
+    assert run_paused_recovery(monkeypatch, LoopNebius(), store)
 
     assert store.status_updates and store.status_updates[0][1] == "queued"
-    assert len(queue) == 1 and queue[0].job_id == "p1"
 
 
-def test_recovery_loop_skips_while_queue_busy(monkeypatch):
+def test_recovery_loop_schedules_once_while_queue_busy(monkeypatch):
 
     calls = {"listed": 0}
 
@@ -762,26 +780,86 @@ def test_recovery_loop_skips_while_queue_busy(monkeypatch):
             calls["listed"] += 1
             return super().list_paused()
 
-    queue = run_recovery_loop(
-        monkeypatch, LoopNebius(), BusyQueueStore([paused_row()]),
-        passes=2, active=("running-job", None),
-    )
+    nebius = LoopNebius(busy=True)
+    store = BusyQueueStore([paused_row()])
+    queue = run_recovery_loop(monkeypatch, nebius, store, passes=2, active=("running-job", None))
 
-    assert calls["listed"] == 0
-    assert queue == []
+    assert calls["listed"] == 2
+    assert [job.job_id for job in queue] == ["p1"]
+    assert queue[0].adopt_existing
+    assert store.list_paused()  # No recovery/state transition outside the worker.
+    assert nebius.recovered == []
 
 
-def test_recovery_loop_does_not_resurrect_cancelled_jobs(monkeypatch):
+def test_worker_recovery_does_not_resurrect_cancelled_jobs(monkeypatch):
     # Recovery can run for minutes; a DELETE that lands mid-recovery wins.
     class CancelledMidRecovery(LoopStore):
         def update_status_if(self, job_id, expected, status, error=None):
             return False  # row is cancelled by the time recovery finishes
 
     nebius = LoopNebius()
-    queue = run_recovery_loop(monkeypatch, nebius, CancelledMidRecovery([paused_row()]))
+    assert not run_paused_recovery(monkeypatch, nebius, CancelledMidRecovery([paused_row()]))
 
     assert nebius.recovered == ["inst-0"]  # recovery itself happened
-    assert queue == []                     # but dispatch is refused
+
+
+def test_worker_recovers_paused_job_before_more_ordinary_work(tmp_path, monkeypatch):
+    from coding_agent_bench import api
+
+    store = api.JobStore(tmp_path / "jobs.db")
+    command = ["bash", "-c", api._build_resume_shell_command("benchmark", "attempt", ["CancelledError"], None)]
+    store.insert("p1", "benchmark", "pi", "dataset", "m", "nebius-b200", command)
+    store.update_status("p1", api.JobStatus.PAUSED)
+    store.insert("normal", "other", "pi", "dataset", "m", "https://model.example", ["harbor", "run"])
+
+    class WorkerNebius(LoopNebius):
+        def get_instance_states(self):
+            return [api.NebiusInstanceState("inst-0", "b200")]
+
+        async def acquire_instance(self, model_name, gpu_config):
+            assert self.recovered == ["inst-0"]
+            return "inst-0", "http://9.9.9.9:8000"
+
+        async def mark_job_started(self, instance_name):
+            self.busy = True
+
+        async def mark_job_completed(self, instance_name):
+            self.busy = False
+
+    nebius = WorkerNebius()
+    real_sleep = asyncio.sleep
+    queue = run_recovery_loop(monkeypatch, nebius, store, passes=2, active=("previous", None))
+    monkeypatch.setattr(asyncio, "sleep", real_sleep)
+    queue.insert(0, api.QueuedJob("normal", ["harbor", "run"], "https://model.example", "m"))
+    ran = []
+
+    async def run_job(job_id, command, **kwargs):
+        ran.append(job_id)
+        if job_id == "p1":
+            assert "coding_agent_bench.resume endpoint" in command[2]
+            assert kwargs["adopt_existing"] is False
+        store.update_status(job_id, api.JobStatus.COMPLETED)
+
+    class OnceEvent:
+        waits = 0
+
+        async def wait(self):
+            self.waits += 1
+            if self.waits > 1:
+                raise StopLoop
+
+        def clear(self):
+            pass
+
+    monkeypatch.setattr(api, "_active_job", None)
+    monkeypatch.setattr(api, "_job_event", OnceEvent())
+    monkeypatch.setattr(api, "_run_job", run_job)
+    with pytest.raises(StopLoop):
+        asyncio.run(api._worker())
+
+    assert ran == ["p1", "normal"]
+    assert store.get("p1")["status"] == "completed"
+    assert store.get("normal")["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------

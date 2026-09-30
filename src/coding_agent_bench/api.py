@@ -761,8 +761,8 @@ class JobStore:
         finally:
             conn.close()
 
-    def cancel_unconfirmed_pause(self, job_id: str) -> bool:
-        """Claim orphan cancellation without racing successful checkpoint finalization."""
+    def cancel_unconfirmed_pause(self, job_id: str, parent_state: str = "missing") -> bool:
+        """Claim cancellation without racing successful checkpoint finalization."""
         conn = self._connect()
         try:
             cur = conn.execute(
@@ -770,7 +770,7 @@ class JobStore:
                 "WHERE job_id = ? AND status = ? AND pause_checkpointed = 0",
                 (
                     JobStatus.CANCELLING.value,
-                    "Cancellation requested: parent Job missing; checkpoint unconfirmed",
+                    f"Cancellation requested: parent Job {parent_state}; checkpoint unconfirmed",
                     job_id, JobStatus.PAUSING.value,
                 ),
             )
@@ -927,105 +927,80 @@ async def _build_pod_cleanup_loop():
 
 
 async def _resume_paused_jobs_loop():
-    """Park-and-wait engine for preempted jobs: restart the VM, then re-queue.
-
-    Waits for Nebius to be reachable again indefinitely; the resume budget
-    only counts actual mid-run preemptions. Flipping a row to queued defers
-    full re-provisioning (recreate if needed, vLLM start, new-IP rewrite) to
-    the worker's normal acquire path.
-    """
+    """Schedule bounded recovery attempts through the serial worker, even when busy."""
     last_pausing_job_id = None
     while True:
         await asyncio.sleep(PAUSED_POLL_INTERVAL_SECONDS)
         if _nebius is None or _shutting_down:
             continue
-        if _active_job is not None:
-            continue  # never fight the serial queue for the shared instance
         try:
-            # A slow/failed upload must not be turned into a resumable checkpoint.
-            # Revisit retained parents after the worker's bounded wait expires.
             pending_rows = job_store.list_pausing()
             last_index = next(
                 (index for index, row in enumerate(pending_rows)
                  if row["job_id"] == last_pausing_job_id),
                 -1,
             )
-            if pending_rows:
-                # Rotate even when a checkpoint stays unconfirmed indefinitely.
-                pending = pending_rows[(last_index + 1) % len(pending_rows)]
-                last_pausing_job_id = pending["job_id"]
-                await _pause_commit(
-                    pending["job_id"], OpenshiftJob(pending["job_id"])
-                )
+            split = (last_index + 1) % len(pending_rows) if pending_rows else 0
+            pending_rows = pending_rows[split:] + pending_rows[:split]
             rows = job_store.list_paused()
         except Exception:
             logger.exception("Paused job scan failed")
             continue
-        for row in rows:
-            gpu = _parse_nebius_url(row["server_url"])
-            if gpu is None:
-                logger.warning(
-                    f"Paused job {row['job_id']} has no Nebius server URL; re-queuing for normal handling"
-                )
-                if job_store.update_status_if(
-                    row["job_id"], JobStatus.PAUSED, JobStatus.QUEUED, error=row["error"]
-                ):
-                    _job_queue.append(QueuedJob(
-                        row["job_id"],
-                        json.loads(row["command"]),
-                        row["server_url"],
-                        row["model_name"],
-                    ))
-                    _job_event.set()
-                continue
-            # Note: has_busy_instance()/recovery vs. a concurrent worker
-            # acquire on the same shared instance is a benign TOCTOU: the
-            # serial queue means the worst case is a redundant start call
-            # (idempotent when RUNNING) or one wasted model swap.
-            if _nebius.has_busy_instance():
-                continue
-            try:
-                instance_name = await _nebius.adopt_paused_instance(row["model_name"], gpu)
-                if instance_name is not None:
-                    if _active_job is not None:
-                        continue
-                    await _nebius.recover_stopped_instance(instance_name)
-                attempt_note = f" (attempt {int(row.get('preempt_attempts') or 0)}/{MAX_PREEMPT_RESUMES})" if MAX_PREEMPT_RESUMES else ""
-                outcome_note = (
-                    "VM recovered — resuming"
-                    if instance_name is not None
-                    else "instance unavailable — worker will recreate"
-                )
-                # Recovery may take minutes: a cancellation that landed in the
-                # meantime must win, so re-enter the queue only if still paused.
-                if not job_store.update_status_if(
-                    row["job_id"],
-                    JobStatus.PAUSED,
-                    JobStatus.QUEUED,
-                    error=f"{outcome_note}{attempt_note}",
-                ):
-                    logger.info(
-                        f"Paused job {row['job_id']} left the paused state during recovery; not re-queuing"
-                    )
-                    break
-                # Flipping the DB row is not dispatch: the original QueuedJob
-                # entry was popped before the job ever ran, so the row must be
-                # re-added to the in-memory queue for the worker to pick it up.
+        scheduled = {queued.job_id for queued in _job_queue}
+        if _active_job is not None:
+            scheduled.add(_active_job[0])
+        # One checkpoint and one recovery per pass. Durable rows stay paused
+        # until the worker owns the shared VM and has proved recovery succeeded.
+        for candidates in (pending_rows, rows):
+            for row in candidates:
+                if row["job_id"] in scheduled:
+                    continue
                 _job_queue.append(QueuedJob(
                     row["job_id"],
                     json.loads(row["command"]),
                     row["server_url"],
                     row["model_name"],
+                    adopt_existing=True,
                 ))
+                scheduled.add(row["job_id"])
+                if row["status"] == JobStatus.PAUSING.value:
+                    last_pausing_job_id = row["job_id"]
                 _job_event.set()
-                logger.info(f"Re-queued paused job {row['job_id']}")
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception(
-                    f"Nebius still unavailable for paused job {row['job_id']}; retrying next pass"
-                )
-            break  # one paused job per pass: the shared VM makes serial order matter
+                break
+
+
+async def _recover_paused_job(row: dict) -> bool:
+    """Recover under serial-worker ownership, retaining paused state on failure."""
+    gpu = _parse_nebius_url(row["server_url"])
+    if gpu is None:
+        return job_store.update_status_if(
+            row["job_id"], JobStatus.PAUSED, JobStatus.QUEUED, error=row["error"]
+        )
+    if _nebius is None or _nebius.has_busy_instance():
+        return False
+    try:
+        instance_name = await _nebius.adopt_paused_instance(row["model_name"], gpu)
+        if instance_name is not None:
+            await _nebius.recover_stopped_instance(instance_name)
+        attempt_note = f" (attempt {int(row.get('preempt_attempts') or 0)}/{MAX_PREEMPT_RESUMES})" if MAX_PREEMPT_RESUMES else ""
+        outcome_note = (
+            "VM recovered — resuming"
+            if instance_name is not None
+            else "instance unavailable — worker will recreate"
+        )
+        # A cancellation or manual resume during the await must win.
+        return job_store.update_status_if(
+            row["job_id"], JobStatus.PAUSED, JobStatus.QUEUED,
+            error=f"{outcome_note}{attempt_note}",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "Nebius still unavailable for paused job %s; retrying next pass",
+            row["job_id"],
+        )
+        return False
 
 
 async def _best_effort_cleanup(oj: OpenshiftJob, signal: bool = False) -> str | None:
@@ -1193,14 +1168,33 @@ async def _pause_commit(job_id: str, oj: OpenshiftJob) -> bool:
             if condition.get("status") == "True"
         }
         checkpointed = "Complete" in conditions
+        legacy_parent = False
         if existing is not None and not conditions.intersection({"Complete", "Failed"}):
             try:
                 checkpointed = await oj.request_pause(
                     row.get("error") or "Nebius model server was preempted",
                     wait_seconds=PAUSE_UPLOAD_TIMEOUT_SECONDS,
                 )
+            except RuntimeError as exc:
+                if "Parent pod predates cooperative pause support" in str(exc):
+                    legacy_parent = True
+                    logger.warning(
+                        "Cannot checkpoint %s: parent predates cooperative pause support",
+                        job_id,
+                    )
+                else:
+                    logger.exception("Cooperative pause request failed for %s", job_id)
             except Exception:
                 logger.exception("Cooperative pause request failed for %s", job_id)
+        if legacy_parent:
+            error = (
+                "VM preempted; checkpoint unconfirmed; parent Job predates "
+                "cooperative pause support; parent retained for manual recovery"
+            )
+            job_store.update_status_if(
+                job_id, JobStatus.PAUSING, JobStatus.PAUSING, error=error
+            )
+            return False
         if not checkpointed:
             job_store.update_status_if(
                 job_id, JobStatus.PAUSING, JobStatus.PAUSING,
@@ -1528,12 +1522,21 @@ async def _process_queued_job(queued: QueuedJob) -> None:
     model_config: ModelConfig | None = None
     nebius_instance_name: str | None = None
     try:
-        nebius_gpu_config = _parse_nebius_url(server_url)
-        job_server_url: str | None = server_url
-        managed_endpoint = False
         row = job_store.get(job_id)
         if not row:
             return
+        if adopt_existing and row["status"] in (JobStatus.PAUSED.value, JobStatus.QUEUED.value):
+            # A manual resume may replace a scheduled recovery's saved command.
+            command = json.loads(row["command"])
+            server_url, model_name = row["server_url"], row["model_name"]
+        if row["status"] == JobStatus.PAUSED.value:
+            if not await _recover_paused_job(row):
+                return
+            adopt_existing = False
+            row = job_store.get(job_id)
+        nebius_gpu_config = _parse_nebius_url(server_url)
+        job_server_url: str | None = server_url
+        managed_endpoint = False
 
         if row["status"] in (JobStatus.COMPLETING.value, JobStatus.FAILING.value):
             final_status = JobStatus.COMPLETED if row["status"] == JobStatus.COMPLETING.value else JobStatus.FAILED
@@ -1709,6 +1712,7 @@ async def _worker():
                 JobStatus.FAILING.value,
                 JobStatus.CANCELLING.value,
                 JobStatus.PAUSING.value,
+                JobStatus.PAUSED.value,
             )
             if not row or (adopt_existing and row["status"] not in recoverable_statuses):
                 continue
@@ -2122,9 +2126,14 @@ async def delete_job(job_id: str):
             existing = await OpenshiftJob(job_id)._get_job()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Unable to verify the parent Job is absent; cancellation deferred") from exc
-        if existing is not None:
+        failed_parent = existing is not None and any(
+            condition.get("type") == "Failed" and condition.get("status") == "True"
+            for condition in existing.get("status", {}).get("conditions", [])
+        )
+        if existing is not None and not failed_parent:
             raise HTTPException(status_code=400, detail="Job is still checkpointing; parent Job must be retained")
-        if not job_store.cancel_unconfirmed_pause(job_id):
+        parent_state = "terminally failed" if failed_parent else "missing"
+        if not job_store.cancel_unconfirmed_pause(job_id, parent_state=parent_state):
             raise HTTPException(status_code=409, detail="Job state or checkpoint changed; refresh before retrying")
         # Route orphan task-pod cleanup through the serial worker, with durable
         # cancelling state so a service restart also resumes cleanup.

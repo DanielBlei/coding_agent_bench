@@ -60,6 +60,22 @@ def test_orphan_cancellation_survives_restart_and_cleans_up(orphan, monkeypatch)
     assert job.deleted == 1
 
 
+def test_failed_parent_can_be_cancelled_without_checkpoint(orphan):
+    store, job = orphan
+    job.existing = {
+        "status": {"conditions": [{"type": "Failed", "status": "True"}]}
+    }
+
+    response = asyncio.run(api.delete_job("orphan"))
+
+    assert response["message"] == "Job cancelling"
+    assert store.get("orphan")["status"] == "cancelling"
+    assert store.get("orphan")["pause_checkpointed"] == 0
+    assert "terminally failed" in store.get("orphan")["error"]
+    assert api._job_event.is_set()
+    assert api._job_queue[0].adopt_existing
+
+
 @pytest.mark.parametrize("checkpointed", [False, True])
 def test_retained_or_checkpointed_parent_cannot_be_cancelled(orphan, checkpointed):
     store, job = orphan

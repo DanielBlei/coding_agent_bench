@@ -303,10 +303,21 @@ ownership manifests are retained. If deletion partially fails, its manifest stay
 available for a later cleanup attempt.
 
 A job stuck in `pausing` can be cancelled through `DELETE /jobs/<job_id>` when
-OpenShift confirms its parent Job is absent and its checkpoint is still
+OpenShift confirms its parent Job is absent or terminally failed and its checkpoint is still
 unconfirmed. Cancellation is queued for workload cleanup and survives service
-restarts; it does not mark the checkpoint as usable. Jobs whose parents still
-exist, or whose checkpoints are being finalized, remain protected from this path.
+restarts; it does not mark the checkpoint as usable. Jobs with live parents,
+or whose checkpoints are being finalized, remain protected from this path.
+Legacy parents without cooperative-pause support remain in `pausing` and are
+retained for manual recovery rather than deleting unuploaded local results.
+
+Paused-job recovery attempts are scheduled through the serial worker even while
+other jobs are running. Recovery does not compete with an active job for the
+shared Nebius instance, and a failed attempt leaves the job paused for a later retry.
+
+The stage and production deployment overlays set `CODING_AGENT_BENCH_IMAGE` to
+the queue's own image so benchmark and resume workers use matching code. When
+running a custom queue image outside these overlays, set this variable to the
+same image reference.
 
 ### (Optional) Connect to Nebius
 
