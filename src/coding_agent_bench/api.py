@@ -1477,7 +1477,7 @@ async def resume_job(job_id: str, req: ResumeJobRequest = ResumeJobRequest()):
 
     job_dir = f"/app/jobs/{shlex.quote(original_job_name)}"
     py_job_dir = f"/app/jobs/{original_job_name}"
-    aws = "uv run --no-sync --no-cache aws --endpoint-url http://harbor-minio:9000"
+    aws = "uv run --no-sync --no-cache aws --endpoint-url http://harbor-storage:9000"
     results_uri = shlex.quote(f"s3://results/{original_job_name}/")
     # A separate bucket keeps recovery snapshots out of results consumers' listings.
     staging_root = f"s3://results-staging/{original_job_name}/{resume_job_id}"
@@ -1499,8 +1499,8 @@ async def resume_job(job_id: str, req: ResumeJobRequest = ResumeJobRequest()):
         url_replace_step = _build_url_replace_shell_step(req.server_url, py_job_dir)
 
     shell_command = (
-        "export AWS_ACCESS_KEY_ID=\"$MINIO_ROOT_USER\" "
-        "AWS_SECRET_ACCESS_KEY=\"$MINIO_ROOT_PASSWORD\" "
+        "export AWS_ACCESS_KEY_ID=\"$STORAGE_ACCESS_KEY\" "
+        "AWS_SECRET_ACCESS_KEY=\"$STORAGE_SECRET_KEY\" "
         "AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true"
         f" && {aws} s3 cp --recursive {results_uri} {job_dir}/"
         f"{_build_parent_env_shell_step(py_job_dir)}"

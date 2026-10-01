@@ -225,7 +225,7 @@ The workflow expects the Secrets to already exist in the target namespace. It
 only verifies them and applies the two Kustomizations. The files below are safe
 templates for local reference only; fill them in locally and do not commit them:
 
-- `deploy/minio/base/secret.example.yaml`
+- `deploy/storage/base/secret.example.yaml`
 - `deploy/job-queue/base/secret.example.yaml`
 - `deploy/job-queue/base/nebius-secret.example.yaml`
 - `deploy/intake-poller/base/secret.example.yaml`
@@ -235,7 +235,7 @@ namespace:
 
 ```sh
 oc project <namespace>
-oc apply -f deploy/minio/base/secret.yaml
+oc apply -f deploy/storage/base/secret.yaml
 oc apply -f deploy/job-queue/base/secret.yaml
 oc apply -f deploy/job-queue/base/nebius-secret.yaml
 oc apply -f deploy/intake-poller/base/secret.yaml

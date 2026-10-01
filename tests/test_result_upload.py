@@ -36,8 +36,8 @@ uv() {
             return "$HARBOR_RC"
             ;;
         aws)
-            [ "$AWS_ACCESS_KEY_ID" = "$MINIO_ROOT_USER" ] || return 99
-            [ "$AWS_SECRET_ACCESS_KEY" = "$MINIO_ROOT_PASSWORD" ] || return 99
+            [ "$AWS_ACCESS_KEY_ID" = "$STORAGE_ACCESS_KEY" ] || return 99
+            [ "$AWS_SECRET_ACCESS_KEY" = "$STORAGE_SECRET_KEY" ] || return 99
             [ "$AWS_DEFAULT_REGION" = us-east-1 ] || return 99
             [ "$AWS_EC2_METADATA_DISABLED" = true ] || return 99
             shift 3
@@ -76,8 +76,8 @@ def run_shell(tmp_path, command, harbor_rc=0, fail_stage="", job_name=None, buck
             "FAKE_S3": str(Path(__file__).with_name("fake_s3.py")),
             "REMOTE_DIR": str(remote),
             "JOB_DIR": str(tmp_path / "jobs" / job_name),
-            "MINIO_ROOT_USER": "test user",
-            "MINIO_ROOT_PASSWORD": "test password with spaces",
+            "STORAGE_ACCESS_KEY": "test user",
+            "STORAGE_SECRET_KEY": "test password with spaces",
         },
         cwd=tmp_path,
         capture_output=True,
