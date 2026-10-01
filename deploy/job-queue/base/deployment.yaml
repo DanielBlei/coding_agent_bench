@@ -62,6 +62,8 @@ spec:
           value: /tmp/uv-cache
         - name: JOB_STORE_PATH
           value: /app/data/jobs.db
+        - name: CODING_AGENT_BENCH_IMAGE
+          value: ghcr.io/redhat-et/coding_agent_bench:tag
         envFrom:
         - secretRef:
             name: job-queue-secret

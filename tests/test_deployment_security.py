@@ -1,10 +1,14 @@
 """Deployment security regression tests."""
 
 from pathlib import Path
+import shutil
+import subprocess
 
+import pytest
 import yaml
 
 from coding_agent_bench import api
+from coding_agent_bench.job import OpenshiftJob
 
 
 DEPLOYMENT_PATHS = (
@@ -87,3 +91,23 @@ def test_intake_cronjob_uses_a_dedicated_poller_secret():
         assert env[key]["valueFrom"]["secretKeyRef"]["name"] == "intake-poller-secret"
 
     assert env["API_KEY"]["valueFrom"]["secretKeyRef"]["name"] == "job-queue-secret"
+
+
+@pytest.mark.parametrize("overlay", ["stage", "prod"])
+def test_deployed_workers_use_the_queue_image(overlay, monkeypatch):
+    cli = shutil.which("oc") or shutil.which("kubectl")
+    if cli is None:
+        pytest.skip("oc or kubectl is required to render deployment overlays")
+    path = DEPLOYMENT_PATHS[0].parents[1] / "overlays" / overlay
+    rendered = subprocess.run(
+        [cli, "kustomize", str(path)], check=True, capture_output=True,
+        text=True, timeout=30,
+    ).stdout
+    deployment = next(obj for obj in yaml.safe_load_all(rendered) if obj["kind"] == "Deployment")
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    env = {entry["name"]: entry.get("value") for entry in container["env"]}
+    assert env["CODING_AGENT_BENCH_IMAGE"] == container["image"]
+    monkeypatch.setenv("CODING_AGENT_BENCH_IMAGE", env["CODING_AGENT_BENCH_IMAGE"])
+    job = OpenshiftJob("benchmark")
+    for spec in (job._job_spec(["harbor", "run"]), job._resume_job_spec("resume")):
+        assert spec["spec"]["template"]["spec"]["containers"][0]["image"] == container["image"]

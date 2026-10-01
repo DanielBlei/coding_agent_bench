@@ -44,6 +44,7 @@ Reproducible benchmarks for coding agents and models using Harbor
 - [Run with Openshift](#run-with-openshift)
   - [Run Tasks in Openshift (Orchestrate Locally)](#run-tasks-in-openshift-orchestrate-locally)
   - [Run Tasks and Orchestrate in Openshift](#run-tasks-and-orchestrate-in-openshift)
+- [Debugging Runs](#debugging-runs)
 - [WIP](#wip)
   - [Run with Gemini and Gemini CLI](#run-with-gemini-and-gemini-cli)
   - [Run with vLLM and Gemini CLI](#run-with-vllm-and-gemini-cli)
@@ -285,6 +286,40 @@ Cancel a running or queued job:
 ```sh
 curl -X DELETE $JOB_QUEUE_URL/jobs/<job_id> -H "X-API-Key: <your-api-key>"
 ```
+
+#### Resume snapshots in MinIO
+
+Resumed jobs keep recovery snapshots under
+`s3://results-staging/<original-job-name>/<attempt>/` before syncing updated
+artifacts to `s3://results/<original-job-name>/`.
+
+After a successful resume and sync, manifest-owned staging objects for that job are removed
+only when Harbor reports every trial completed, with no pending, running,
+cancelled, or errored trials, and the current pod has no pause request. Paused,
+failed, or incompletely synced runs retain their snapshots. A cleanup failure is
+logged without failing the completed benchmark. Each new snapshot marker records
+the exact job, attempt, and uploaded file names. Cleanup deletes only those keys,
+so nested job names and unrelated objects remain intact. Legacy snapshots without
+ownership manifests are retained. If deletion partially fails, its manifest stays
+available for a later cleanup attempt.
+
+A job stuck in `pausing` can be cancelled through `DELETE /jobs/<job_id>` when
+OpenShift confirms its parent Job is absent or terminally failed and its checkpoint is still
+unconfirmed. Cancellation is queued for workload cleanup and survives service
+restarts; it does not mark the checkpoint as usable. Jobs with live parents,
+or whose checkpoints are being finalized, remain protected from this path.
+Jobs with legacy parents without cooperative-pause support are marked `failed`
+with a checkpoint-unconfirmed error, stopping automatic retries. Their parents
+and unuploaded local results are retained for manual recovery.
+
+Paused-job recovery attempts are scheduled through the serial worker even while
+other jobs are running. Recovery does not compete with an active job for the
+shared Nebius instance, and a failed attempt leaves the job paused for a later retry.
+
+The stage and production deployment overlays set `CODING_AGENT_BENCH_IMAGE` to
+the queue's own image so benchmark and resume workers use matching code. When
+running a custom queue image outside these overlays, set this variable to the
+same image reference.
 
 ### (Optional) Connect to Nebius
 
@@ -713,6 +748,19 @@ uv run coding-agent-bench run \
     --remote \
     --environment openshift
 ```
+
+## Debugging Runs
+
+Each run leaves the agent's raw trajectory at `jobs/<job>/<scenario>/agent/<agent>.txt`
+(one JSON event per line). Render one readably by pointing at the scenario dir:
+
+```sh
+uv run scripts/manual/parse_agent_log.py jobs/<job-name>/<scenario>
+```
+
+Recognized logs: `claude-code.txt`, `opencode.txt`, `pi.txt`. Chain-of-thought is hidden
+by default (`--show-reasoning` to include it) and tool output is capped at 1000 chars
+(`--limit N`, `--limit 0` for everything).
 
 ## WIP
 
