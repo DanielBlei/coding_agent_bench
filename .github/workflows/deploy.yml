@@ -49,7 +49,7 @@ jobs:
           set -euo pipefail
 
           test -n "$NAMESPACE"
-          for secret in harbor-minio job-queue-secret; do
+          for secret in harbor-storage job-queue-secret; do
             oc -n "$NAMESPACE" get secret "$secret" >/dev/null
           done
           if oc -n "$NAMESPACE" get secret intake-poller-secret >/dev/null 2>&1; then
@@ -57,6 +57,12 @@ jobs:
               test -n "$(oc -n "$NAMESPACE" get secret intake-poller-secret -o "jsonpath={.data.$key}")"
             done
           fi
+
+      - name: Apply storage
+        run: oc apply -k deploy/storage/overlays/$OVERLAY -n "$NAMESPACE"
+
+      - name: Wait for storage rollout
+        run: oc rollout status deployment/harbor-storage -n "$NAMESPACE" --timeout=10m
 
       - name: Apply job queue
         run: oc apply -k deploy/job-queue/overlays/$OVERLAY -n "$NAMESPACE"
