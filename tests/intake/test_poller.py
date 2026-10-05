@@ -238,6 +238,128 @@ def test_running_row_updated_to_failed(mock_httpx):
 
 
 @patch("coding_agent_bench.intake.poller.httpx")
+def test_running_row_updated_to_failed_with_unknown_error_fallback(mock_httpx):
+    """Record a placeholder error when a failed response carries no error."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"status": "failed", "error": None}
+    mock_httpx.get.return_value = mock_response
+
+    sheets = MagicMock()
+    sheets.get_all_rows.return_value = [
+        _make_row(STATUS=Status.RUNNING.value, JOB_ID="uuid-123"),
+    ]
+
+    process_rows(
+        sheets=sheets,
+        api_base_url="http://job-queue-service",
+        api_key="test-key",
+    )
+
+    sheets.update_cell.assert_any_call(1, Column.ERROR, "Unknown error")
+
+
+@patch("coding_agent_bench.intake.poller.httpx")
+def test_failed_row_preserves_existing_sheet_error(mock_httpx):
+    """Keep an error already recorded in the sheet over an empty API error."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"status": "failed", "error": None}
+    mock_httpx.get.return_value = mock_response
+
+    sheets = MagicMock()
+    sheets.get_all_rows.return_value = [
+        _make_row(STATUS=Status.RUNNING.value, JOB_ID="uuid-123", ERROR="Pod crashed"),
+    ]
+
+    process_rows(
+        sheets=sheets,
+        api_base_url="http://job-queue-service",
+        api_key="test-key",
+    )
+
+    sheets.update_cell.assert_any_call(1, Column.STATUS, Status.FAILED.value)
+    assert all(
+        call.args != (1, Column.ERROR, "Unknown error")
+        for call in sheets.update_cell.call_args_list
+    )
+
+
+@patch("coding_agent_bench.intake.poller.httpx")
+def test_running_row_updated_to_paused_on_preemption(mock_httpx):
+    """Show a Nebius-preempted job as paused, not terminal, in the sheet."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "status": "paused",
+        "error": "Nebius instance preempted",
+    }
+    mock_httpx.get.return_value = mock_response
+
+    sheets = MagicMock()
+    sheets.get_all_rows.return_value = [
+        _make_row(STATUS=Status.RUNNING.value, JOB_ID="uuid-123"),
+    ]
+
+    process_rows(
+        sheets=sheets,
+        api_base_url="http://job-queue-service",
+        api_key="test-key",
+    )
+
+    sheets.update_cell.assert_any_call(1, Column.STATUS, Status.PAUSED.value)
+    sheets.update_cell.assert_any_call(1, Column.ERROR, "Nebius instance preempted")
+    assert all(
+        call.args != (1, Column.NOTIFIED_DONE, "TRUE")
+        for call in sheets.update_cell.call_args_list
+    )
+
+
+@patch("coding_agent_bench.intake.poller.httpx")
+def test_paused_row_resumes_to_running(mock_httpx):
+    """Clear the paused sheet status once the queue resumes the job."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"status": "running", "error": None}
+    mock_httpx.get.return_value = mock_response
+
+    sheets = MagicMock()
+    sheets.get_all_rows.return_value = [
+        _make_row(STATUS=Status.PAUSED.value, JOB_ID="uuid-123"),
+    ]
+
+    process_rows(
+        sheets=sheets,
+        api_base_url="http://job-queue-service",
+        api_key="test-key",
+    )
+
+    mock_httpx.get.assert_called_once()
+    sheets.update_cell.assert_any_call(1, Column.STATUS, Status.RUNNING.value)
+
+
+@patch("coding_agent_bench.intake.poller.httpx")
+def test_running_row_updated_to_cancelled(mock_httpx):
+    """Reflect a user-initiated cancellation in the sheet."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "status": "cancelled",
+        "error": "Cancelled by user",
+    }
+    mock_httpx.get.return_value = mock_response
+
+    sheets = MagicMock()
+    sheets.get_all_rows.return_value = [
+        _make_row(STATUS=Status.RUNNING.value, JOB_ID="uuid-123"),
+    ]
+
+    process_rows(
+        sheets=sheets,
+        api_base_url="http://job-queue-service",
+        api_key="test-key",
+    )
+
+    sheets.update_cell.assert_any_call(1, Column.STATUS, Status.CANCELLED.value)
+    sheets.update_cell.assert_any_call(1, Column.ERROR, "Cancelled by user")
+
+
+@patch("coding_agent_bench.intake.poller.httpx")
 def test_already_completed_row_is_skipped(mock_httpx):
     """Skip a terminal row once its status has been reconciled into the sheet."""
     sheets = MagicMock()

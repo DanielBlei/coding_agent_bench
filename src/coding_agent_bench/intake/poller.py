@@ -18,7 +18,12 @@ from coding_agent_bench.utils import is_stage_environment
 
 logger = logging.getLogger(__name__)
 
-TERMINAL_STATUSES = {Status.COMPLETED.value, Status.FAILED.value, Status.NEEDS_REVIEW.value}
+TERMINAL_STATUSES = {
+    Status.COMPLETED.value,
+    Status.FAILED.value,
+    Status.CANCELLED.value,
+    Status.NEEDS_REVIEW.value,
+}
 
 
 def _auto_approve_enabled() -> bool:
@@ -124,7 +129,11 @@ def process_rows(
 
             if status == Status.APPROVED.value or (not status and _auto_approve_enabled()):
                 _handle_new_row(sheets, row, row_num, api_base_url, api_key)
-            elif not stage and status in (Status.QUEUED.value, Status.RUNNING.value):
+            elif not stage and status in (
+                Status.QUEUED.value,
+                Status.RUNNING.value,
+                Status.PAUSED.value,
+            ):
                 _handle_inflight_row(sheets, row, row_num, api_base_url, api_key)
         except Exception:
             logger.exception("Failed to process row %d", row_num)
@@ -202,11 +211,30 @@ def _handle_inflight_row(
 
     if api_status in ("completed", "failed"):
         error = job_data.get("error")
+        if api_status == "failed" and not error and not row[Column.ERROR].strip():
+            error = "Unknown error"
         target = Status.COMPLETED.value if api_status == "completed" else Status.FAILED.value
         if current_status != target:
             sheets.update_cell(row_num, Column.STATUS, target)
         if error and row[Column.ERROR].strip() != error:
             sheets.update_cell(row_num, Column.ERROR, error)
+        sheets.update_cell(row_num, Column.NOTIFIED_DONE, "TRUE")
+
+    elif api_status in ("paused", "pausing"):
+        # A Nebius preemption parks the job while the instance restarts; it
+        # auto-resumes, so the sheet must not read it as terminal.
+        error = job_data.get("error")
+        if error and row[Column.ERROR].strip() != error:
+            sheets.update_cell(row_num, Column.ERROR, error)
+        if current_status != Status.PAUSED.value:
+            sheets.update_cell(row_num, Column.STATUS, Status.PAUSED.value)
+
+    elif api_status == "cancelled":
+        error = job_data.get("error")
+        if error and row[Column.ERROR].strip() != error:
+            sheets.update_cell(row_num, Column.ERROR, error)
+        if current_status != Status.CANCELLED.value:
+            sheets.update_cell(row_num, Column.STATUS, Status.CANCELLED.value)
         sheets.update_cell(row_num, Column.NOTIFIED_DONE, "TRUE")
 
     elif api_status == "running" and current_status != Status.RUNNING.value:

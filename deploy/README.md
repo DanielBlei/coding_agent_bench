@@ -143,9 +143,10 @@ pools:
 
 The `intake-poller` CronJob (`deploy/intake-cronjob.yml`) reads benchmark
 requests from a Google Sheet and submits approved rows to the job queue.
-Job status (Queued, Running, Completed, Failed) and any errors are written
-back to the sheet, which is the single source of truth for requesters. It
-runs every 6 hours.
+Job status (Queued, Running, Paused, Completed, Failed, Cancelled) and any
+errors are written back to the sheet, which is the single source of truth
+for requesters. A Nebius-preempted job shows as Paused while the queue
+restarts and resumes it automatically. It runs every 6 hours.
 
 ### Google Sheet
 
