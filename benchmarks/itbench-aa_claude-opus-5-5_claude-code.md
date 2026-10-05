@@ -13,8 +13,8 @@
 
 **Score:** 35.4% (10 Full Reward / 9 Partial Reward / 21 Zero Reward / 0 Errors)   
 **Error Rate:** 0.0% ()  
-**Total Time:** 02h 15m 39s  
-**Agent Time:** 01h 13m 33s (00h 01m 50s avg per task)  
+**Total Time:** 00h 33m 54s  
+**Agent Time:** 00h 18m 23s (00h 01m 50s avg per task)  
 **Estimated Cost:** $20.52  ($0.51 avg per task)  
 **Input Tokens:** 31578057 (789451 avg per task)  
 **Output Tokens:** 318164 (7954 avg per task)  
@@ -75,6 +75,7 @@ uv run harbor run --agent claude-code \
 ```json
 {
     "job_name": "it_bench_aa/claude_opus_5_5_os_high",
+    "n_concurrent_trials": 4,
     "agent_timeout_multiplier": 3.0,
     "debug": true,
     "retry": {
