@@ -142,8 +142,10 @@ pools:
 ## Intake Poller
 
 The `intake-poller` CronJob (`deploy/intake-cronjob.yml`) reads benchmark
-requests from a Google Sheet, submits approved rows to the job queue, and emails
-submitters when a job is queued, completed, or failed. It runs every 6 hours.
+requests from a Google Sheet and submits approved rows to the job queue.
+Job status (Queued, Running, Completed, Failed) and any errors are written
+back to the sheet, which is the single source of truth for requesters. It
+runs every 6 hours.
 
 ### Google Sheet
 
@@ -177,11 +179,7 @@ development.
 |-----|-------------|
 | `GOOGLE_SHEET_ID` | ID of the intake Google Sheet (the value between `/d/` and `/edit` in its URL) |
 | `JOB_QUEUE_URL` | HTTPS URL for the queue API. Use the cluster's TLS/mTLS endpoint; the poller fails closed instead of using plaintext HTTP. |
-| `SENDER_EMAIL` | Address notification emails are sent from. Set it to `ace-model-evals@redhat.com`. |
 | `AUTO_APPROVE` | `"true"` to auto-submit rows with a blank status, otherwise `"false"` |
-| `SMTP_HOST` | Host for the SMTP server to send notifications through |
-| `SMTP_PORT` | Port for the SMTP server to send notifications through |
-| `SMTP_STARTTLS` | Set to `"true"` when the server requires STARTTLS, otherwise `"false"` |
 | `ALLOW_INSECURE_QUEUE_HTTP` | Set to `"true"` when the queue is served over HTTP (e.g. locally), otherwise `"false"` |
 | `service-account.json` | Content of a GCP service account that has read access to the Google Sheet. |
 
@@ -203,11 +201,6 @@ For managed Nebius capacity, an approver can set `SERVER_URL` to an explicit
 resource token such as `nebius-h200` (or `nebius-b200x8`). The queue service
 validates that token, provisions the instance, and supplies its endpoint after
 approval; the requester never needs to know that endpoint.
-
-The CronJob sends notifications through `smtp.corp.redhat.com` on port 25.
-Set `SMTP_HOST` and `SMTP_PORT` on the poller when a different internal relay
-is required. Set `SMTP_STARTTLS=true` when that relay requires STARTTLS. The
-configured `SENDER_EMAIL` must be an address permitted by the relay.
 
 Each submitted Queue row carries a deterministic idempotency key. If the
 CronJob is retried after a network timeout, the queue API returns the original

@@ -33,21 +33,6 @@ spec:
               value: stage
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: /etc/google/service-account.json
-            - name: SMTP_HOST
-              valueFrom:
-                secretKeyRef:
-                  name: intake-poller-secret
-                  key: SMTP_HOST
-            - name: SMTP_PORT
-              valueFrom:
-                secretKeyRef:
-                  name: intake-poller-secret
-                  key: SMTP_PORT
-            - name: SMTP_STARTTLS
-              valueFrom:
-                secretKeyRef:
-                  name: intake-poller-secret
-                  key: SMTP_STARTTLS
             - name: GOOGLE_SHEET_ID
               valueFrom:
                 secretKeyRef:
@@ -63,11 +48,6 @@ spec:
                 secretKeyRef:
                   name: job-queue-secret
                   key: API_KEY
-            - name: SENDER_EMAIL
-              valueFrom:
-                secretKeyRef:
-                  name: intake-poller-secret
-                  key: SENDER_EMAIL
             - name: AUTO_APPROVE
               valueFrom:
                 secretKeyRef:
