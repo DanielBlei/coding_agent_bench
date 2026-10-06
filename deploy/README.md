@@ -142,8 +142,11 @@ pools:
 ## Intake Poller
 
 The `intake-poller` CronJob (`deploy/intake-cronjob.yml`) reads benchmark
-requests from a Google Sheet, submits approved rows to the job queue, and emails
-submitters when a job is queued, completed, or failed. It runs every 6 hours.
+requests from a Google Sheet and submits approved rows to the job queue.
+Job status (Queued, Running, Paused, Completed, Failed, Cancelled) and any
+errors are written back to the sheet, which is the single source of truth
+for requesters. A Nebius-preempted job shows as Paused while the queue
+restarts and resumes it automatically. It runs every 6 hours.
 
 ### Google Sheet
 
@@ -177,11 +180,7 @@ development.
 |-----|-------------|
 | `GOOGLE_SHEET_ID` | ID of the intake Google Sheet (the value between `/d/` and `/edit` in its URL) |
 | `JOB_QUEUE_URL` | HTTPS URL for the queue API. Use the cluster's TLS/mTLS endpoint; the poller fails closed instead of using plaintext HTTP. |
-| `SENDER_EMAIL` | Address notification emails are sent from. Set it to `ace-model-evals@redhat.com`. |
 | `AUTO_APPROVE` | `"true"` to auto-submit rows with a blank status, otherwise `"false"` |
-| `SMTP_HOST` | Host for the SMTP server to send notifications through |
-| `SMTP_PORT` | Port for the SMTP server to send notifications through |
-| `SMTP_STARTTLS` | Set to `"true"` when the server requires STARTTLS, otherwise `"false"` |
 | `ALLOW_INSECURE_QUEUE_HTTP` | Set to `"true"` when the queue is served over HTTP (e.g. locally), otherwise `"false"` |
 | `service-account.json` | Content of a GCP service account that has read access to the Google Sheet. |
 
@@ -203,11 +202,6 @@ For managed Nebius capacity, an approver can set `SERVER_URL` to an explicit
 resource token such as `nebius-h200` (or `nebius-b200x8`). The queue service
 validates that token, provisions the instance, and supplies its endpoint after
 approval; the requester never needs to know that endpoint.
-
-The CronJob sends notifications through `smtp.corp.redhat.com` on port 25.
-Set `SMTP_HOST` and `SMTP_PORT` on the poller when a different internal relay
-is required. Set `SMTP_STARTTLS=true` when that relay requires STARTTLS. The
-configured `SENDER_EMAIL` must be an address permitted by the relay.
 
 Each submitted Queue row carries a deterministic idempotency key. If the
 CronJob is retried after a network timeout, the queue API returns the original
@@ -249,9 +243,10 @@ before applying the intake poller. `nebius-secret` is optional.
 
 Create one namespace for stage and one for production. In each namespace, create a
 deployer ServiceAccount and grant it namespace-admin permissions. The `admin` role
-is used here because the job-queue Kustomization creates RoleBindings, including the
-`anyuid` RoleBinding. A cluster administrator can replace this with a narrower custom
-role, but it must also permit the required RoleBinding operations.
+is used here because the Kustomizations create Roles and RoleBindings. It does **not**
+grant permission to use the OpenShift `anyuid` SCC, however. The deployer must be
+granted that SCC separately so it can apply the two `anyuid` RoleBindings in
+`deploy/job-queue/base`.
 
 Run the following once for each namespace (as a namespace administrator):
 
@@ -259,22 +254,59 @@ Run the following once for each namespace (as a namespace administrator):
 for namespace in <stage-namespace> <production-namespace>; do
   oc create serviceaccount github-deployer -n "$namespace"
   oc adm policy add-role-to-user admin -z github-deployer -n "$namespace"
+  oc adm policy add-scc-to-user anyuid -z github-deployer -n "$namespace"
 done
 ```
 
-The deployment workflow reads the application Secrets before applying the
-Kustomizations. If the cluster's `admin` role does not grant the ServiceAccount
-Secret access, create and bind a dedicated read role in each namespace:
+The last command is required even when the ServiceAccount has the `admin` role.
+It gives the deployer `use` on the `anyuid` SCC, which is required by Kubernetes
+RBAC's escalation check when applying these RoleBindings:
+
+- `harbor-orchestrator-anyuid` for the `harbor-orchestrator` ServiceAccount
+- `harbor-task-anyuid` for the `harbor-task` ServiceAccount
+
+Run the SCC command as a cluster administrator. If the cluster policy does not
+allow a namespace-scoped SCC grant, a cluster administrator must create the
+equivalent RoleBinding for `system:openshift:scc:anyuid` in each namespace.
+
+The deployment workflow reads `harbor-storage`, `job-queue-secret`, and optionally
+`intake-poller-secret` before applying the Kustomizations. The `admin` role normally
+includes Secret read access. If a cluster uses a narrower custom deployer role, it
+must grant `get` on Secrets (and no Secret write access is needed just for this
+workflow). Create and bind a dedicated read role in each namespace:
 
 ```sh
 for namespace in <stage-namespace> <production-namespace>; do
   oc create role github-deployer-secret-reader \
-    --verb=get --verb=list --resource=secrets \
-    -n "$namespace"
+    --verb=get --resource=secrets \
+    -n "$namespace" --dry-run=client -o yaml | oc apply -f -
   oc adm policy add-role-to-user github-deployer-secret-reader \
     -z github-deployer -n "$namespace"
 done
 ```
+
+If using a custom role instead of `admin`, the deployer needs these namespaced
+permissions for the resources in `deploy/`:
+
+| API group | Resources | Required verbs |
+|-----------|-----------|----------------|
+| `""` | `persistentvolumeclaims`, `services`, `serviceaccounts`, `configmaps` | `get`, `create`, `patch`, `update` |
+| `""` | `secrets` | `get` |
+| `apps` | `deployments` | `get`, `create`, `patch`, `update` |
+| `batch` | `cronjobs` | `get`, `create`, `patch`, `update` |
+| `route.openshift.io` | `routes` | `get`, `create`, `patch`, `update` |
+| `rbac.authorization.k8s.io` | `roles`, `rolebindings` | `get`, `create`, `patch`, `update` |
+
+The workflow also needs `get`, `list`, and `watch` on `pods` and `replicasets` for
+rollout status, and `patch` on `deployments` for the stage rollout restart. The
+deployer must be allowed to bind the `harbor-orchestrator` Role and use the
+`system:openshift:scc:anyuid` ClusterRole. Granting `use` on the SCC to the
+deployer, as shown above, satisfies the latter escalation check. For a custom
+deployer role, either grant it every permission contained in the Role it creates
+or grant the narrowly scoped `escalate` permission on that Role; it also needs
+the corresponding `bind` permission when binding a Role or ClusterRole whose
+permissions it does not already hold. A custom role must not grant arbitrary
+cluster-admin permissions just to make RoleBinding creation work.
 
 Verify the permission with the same identity used by CI:
 
@@ -305,6 +337,9 @@ oc login --server=<server> --token=<token>
 oc project <namespace>
 oc auth can-i create deployments
 oc auth can-i create rolebindings
+oc auth can-i use scc/anyuid \
+  --as=system:serviceaccount:<namespace>:github-deployer \
+  -n <namespace>
 ```
 
 ### GitHub setup

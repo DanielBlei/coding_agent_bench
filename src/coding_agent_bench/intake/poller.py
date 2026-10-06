@@ -12,18 +12,18 @@ from coding_agent_bench.intake.config import (
     Status,
     generate_job_name,
 )
-from coding_agent_bench.intake.notify import (
-    send_completed_email,
-    send_failed_email,
-    send_queued_email,
-)
 from coding_agent_bench.intake.sheets import SheetsClient
 from coding_agent_bench.intake.validation import validate_row
 from coding_agent_bench.utils import is_stage_environment
 
 logger = logging.getLogger(__name__)
 
-TERMINAL_STATUSES = {Status.COMPLETED.value, Status.FAILED.value, Status.NEEDS_REVIEW.value}
+TERMINAL_STATUSES = {
+    Status.COMPLETED.value,
+    Status.FAILED.value,
+    Status.CANCELLED.value,
+    Status.NEEDS_REVIEW.value,
+}
 
 
 def _auto_approve_enabled() -> bool:
@@ -107,9 +107,8 @@ def process_rows(
     sheets: SheetsClient,
     api_base_url: str,
     api_key: str,
-    sender_email: str,
 ) -> None:
-    """Process approved, in-flight, and pending-notification spreadsheet rows."""
+    """Process approved and in-flight rows, syncing status into the sheet."""
     stage = is_stage_environment()
     rows = sheets.get_all_rows()
 
@@ -120,27 +119,22 @@ def process_rows(
             status = row[Column.STATUS].strip()
 
             if status in TERMINAL_STATUSES:
-                # Completed/failed rows remain eligible for one retry when the
-                # queue state was persisted but the notification was not.
+                # Completed/failed rows get one final status check when the
+                # terminal state was not yet reconciled into the sheet.
                 if not stage and status in (Status.COMPLETED.value, Status.FAILED.value) and (
                     row[Column.NOTIFIED_DONE].strip().upper() != "TRUE"
                 ):
-                    _handle_inflight_row(
-                        sheets, row, row_num, api_base_url, api_key,
-                        sender_email,
-                    )
+                    _handle_inflight_row(sheets, row, row_num, api_base_url, api_key)
                 continue
 
             if status == Status.APPROVED.value or (not status and _auto_approve_enabled()):
-                _handle_new_row(
-                    sheets, row, row_num, api_base_url, api_key,
-                    sender_email, notify=not stage,
-                )
-            elif not stage and status in (Status.QUEUED.value, Status.RUNNING.value):
-                _handle_inflight_row(
-                    sheets, row, row_num, api_base_url, api_key,
-                    sender_email,
-                )
+                _handle_new_row(sheets, row, row_num, api_base_url, api_key)
+            elif not stage and status in (
+                Status.QUEUED.value,
+                Status.RUNNING.value,
+                Status.PAUSED.value,
+            ):
+                _handle_inflight_row(sheets, row, row_num, api_base_url, api_key)
         except Exception:
             logger.exception("Failed to process row %d", row_num)
 
@@ -151,15 +145,12 @@ def _handle_new_row(
     row_num: int,
     api_base_url: str,
     api_key: str,
-    sender_email: str,
-    notify: bool = True,
 ) -> None:
-    """Validate and submit one approved intake row, then notify its submitter."""
+    """Validate and submit one approved intake row."""
     agent = row[Column.AGENT].strip()
     dataset = row[Column.DATASET].strip()
     model_name = row[Column.MODEL_NAME].strip()
     server_url = row[Column.SERVER_URL].strip()
-    email = row[Column.EMAIL].strip()
 
     existing_job_id = row[Column.JOB_ID].strip()
     if existing_job_id:
@@ -195,13 +186,6 @@ def _handle_new_row(
     sheets.update_cell(row_num, Column.JOB_ID, job_id)
     sheets.update_cell(row_num, Column.STATUS, Status.QUEUED.value)
 
-    if notify:
-        try:
-            send_queued_email(email, agent, dataset, model_name, job_id, sender_email)
-            sheets.update_cell(row_num, Column.NOTIFIED_QUEUED, "TRUE")
-        except Exception:
-            logger.exception("Failed to send queued email for row %d", row_num)
-
 
 def _handle_inflight_row(
     sheets: SheetsClient,
@@ -209,13 +193,10 @@ def _handle_inflight_row(
     row_num: int,
     api_base_url: str,
     api_key: str,
-    sender_email: str,
 ) -> None:
-    """Synchronize queue status and retry a terminal notification when necessary."""
+    """Synchronize queue status back into the spreadsheet."""
     job_id = row[Column.JOB_ID].strip()
-    email = row[Column.EMAIL].strip()
     current_status = row[Column.STATUS].strip()
-    notified_done = row[Column.NOTIFIED_DONE].strip().upper() == "TRUE"
 
     if not job_id:
         return
@@ -228,28 +209,33 @@ def _handle_inflight_row(
 
     api_status = job_data["status"]
 
-    if api_status == "completed":
-        if current_status != Status.COMPLETED.value:
-            sheets.update_cell(row_num, Column.STATUS, Status.COMPLETED.value)
-        if not notified_done:
-            try:
-                send_completed_email(email, job_id, sender_email)
-                sheets.update_cell(row_num, Column.NOTIFIED_DONE, "TRUE")
-            except Exception:
-                logger.exception("Failed to send completed email for row %d", row_num)
-
-    elif api_status == "failed":
-        error = job_data.get("error") or "Unknown error"
-        if current_status != Status.FAILED.value:
-            sheets.update_cell(row_num, Column.STATUS, Status.FAILED.value)
-        if row[Column.ERROR].strip() != error:
+    if api_status in ("completed", "failed"):
+        error = job_data.get("error")
+        if api_status == "failed" and not error and not row[Column.ERROR].strip():
+            error = "Unknown error"
+        target = Status.COMPLETED.value if api_status == "completed" else Status.FAILED.value
+        if current_status != target:
+            sheets.update_cell(row_num, Column.STATUS, target)
+        if error and row[Column.ERROR].strip() != error:
             sheets.update_cell(row_num, Column.ERROR, error)
-        if not notified_done:
-            try:
-                send_failed_email(email, job_id, error, sender_email)
-                sheets.update_cell(row_num, Column.NOTIFIED_DONE, "TRUE")
-            except Exception:
-                logger.exception("Failed to send failed email for row %d", row_num)
+        sheets.update_cell(row_num, Column.NOTIFIED_DONE, "TRUE")
+
+    elif api_status in ("paused", "pausing"):
+        # A Nebius preemption parks the job while the instance restarts; it
+        # auto-resumes, so the sheet must not read it as terminal.
+        error = job_data.get("error")
+        if error and row[Column.ERROR].strip() != error:
+            sheets.update_cell(row_num, Column.ERROR, error)
+        if current_status != Status.PAUSED.value:
+            sheets.update_cell(row_num, Column.STATUS, Status.PAUSED.value)
+
+    elif api_status == "cancelled":
+        error = job_data.get("error")
+        if error and row[Column.ERROR].strip() != error:
+            sheets.update_cell(row_num, Column.ERROR, error)
+        if current_status != Status.CANCELLED.value:
+            sheets.update_cell(row_num, Column.STATUS, Status.CANCELLED.value)
+        sheets.update_cell(row_num, Column.NOTIFIED_DONE, "TRUE")
 
     elif api_status == "running" and current_status != Status.RUNNING.value:
         sheets.update_cell(row_num, Column.STATUS, Status.RUNNING.value)
@@ -280,8 +266,7 @@ if __name__ == "__main__":
     api_base_url = os.environ["JOB_QUEUE_URL"]
     _validate_queue_url(api_base_url)
     api_key = os.environ["API_KEY"]
-    sender_email = os.environ["SENDER_EMAIL"]
 
     client = SheetsClient(credentials_path, sheet_id)
-    process_rows(client, api_base_url, api_key, sender_email)
+    process_rows(client, api_base_url, api_key)
     logger.info("Poller run complete")
