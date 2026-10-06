@@ -287,7 +287,7 @@ Cancel a running or queued job:
 curl -X DELETE $JOB_QUEUE_URL/jobs/<job_id> -H "X-API-Key: <your-api-key>"
 ```
 
-#### Resume snapshots in MinIO
+#### Resume snapshots in object storage
 
 Resumed jobs keep recovery snapshots under
 `s3://results-staging/<original-job-name>/<attempt>/` before syncing updated

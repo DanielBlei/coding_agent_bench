@@ -111,6 +111,7 @@ def run_shell(tmp_path, command, harbor_rc=0, fail_stage="", job_name=None, buck
             "JOB_DIR": str(tmp_path / "jobs" / job_name),
             "STORAGE_ACCESS_KEY": "test user",
             "STORAGE_SECRET_KEY": "test password with spaces",
+            "STORAGE_ENDPOINT_URL": "http://harbor-storage:9000",
         },
         cwd=tmp_path,
         capture_output=True,

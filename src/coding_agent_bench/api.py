@@ -92,7 +92,7 @@ db_path = Path(os.environ.get("JOB_STORE_PATH", "jobs.db"))
 class InstancePreempted(Exception):
     """Raised when the Nebius instance backing a running job is lost mid-run.
 
-    The affected job is paused (checkpointed to MinIO) and auto-resumed once
+    The affected job is paused (checkpointed to object storage) and auto-resumed once
     Nebius is reachable again; it must never surface as user cancellation.
     """
 
@@ -1118,7 +1118,7 @@ async def _delete_recovered_nebius(job_id: str) -> None:
 
 
 def _build_pause_resume_command(row: dict) -> list[str]:
-    """Build the in-row resume command that re-runs a preempted job from MinIO.
+    """Build the in-row resume command that restores a preempted job from storage.
 
     An explicit nebius placeholder as server_url makes the worker re-provision
     the instance and inject the URL rewrite for the new IP at run time.
@@ -1269,7 +1269,7 @@ async def _handle_pause(job_id: str, oj: OpenshiftJob, nebius_instance_name: str
         job_id,
         JobStatus.RUNNING,
         JobStatus.PAUSING,
-        error=f"VM preempted — checkpointing results to MinIO (attempt {attempts + 1}/{MAX_PREEMPT_RESUMES})",
+        error=f"VM preempted — checkpointing results to object storage (attempt {attempts + 1}/{MAX_PREEMPT_RESUMES})",
     ):
         logger.info(f"Job {job_id} left running before pause could start; skipping pause")
         return
@@ -1674,7 +1674,7 @@ async def _process_queued_job(queued: QueuedJob) -> None:
         except InstancePreempted as e:
             logger.error(
                 f"Nebius preemption detected for job {job_id}: {e}; "
-                "checkpointing results to MinIO and parking the job as paused"
+                "checkpointing results to object storage and parking the job as paused"
             )
             await _handle_pause(job_id, oj, nebius_instance_name)
             # A cancel may have raced the pause (which then skipped): finish it.
@@ -2214,7 +2214,7 @@ def _build_resume_shell_command(
     filter_error_types: list[str],
     server_url: str | None,
 ) -> str:
-    """Build the bash -c payload that restores a job from MinIO and resumes it.
+    """Build the bash -c payload that restores a job from object storage and resumes it.
 
     Shared by the manual resume endpoint and preemption auto-resume. The
     worker injects the Nebius URL-rewrite step at run time for placeholder
@@ -2222,7 +2222,7 @@ def _build_resume_shell_command(
     """
     job_dir = f"/app/jobs/{shlex.quote(original_job_name)}"
     py_job_dir = f"/app/jobs/{original_job_name}"
-    aws = "uv run --no-sync --no-cache aws --endpoint-url http://harbor-storage:9000"
+    aws = 'uv run --no-sync --no-cache aws --endpoint-url "$STORAGE_ENDPOINT_URL"'
     results_uri = shlex.quote(f"s3://results/{original_job_name}/")
     # A separate bucket keeps recovery snapshots out of results consumers' listings.
     staging_root = f"s3://results-staging/{original_job_name}/{staging_id}"

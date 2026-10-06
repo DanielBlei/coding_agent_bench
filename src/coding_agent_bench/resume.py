@@ -158,7 +158,7 @@ def is_job_complete(job_dir: Path) -> bool:
 
     A cooperative pause also exits with status zero. Check both the current
     pod's pause request and trial counts; preemption.json can describe an older
-    attempt restored from MinIO and must not block a later successful resume.
+    attempt restored from object storage and must not block a later successful resume.
     Missing or malformed metadata is not proof of completion.
     """
     from coding_agent_bench.preemption import PAUSE_REQUEST_PATH
