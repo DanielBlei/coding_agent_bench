@@ -8,7 +8,7 @@ import os
 import json
 
 from coding_agent_bench.preemption import PAUSE_REQUEST_PATH
-from coding_agent_bench.storage import storage_endpoint_url
+from coding_agent_bench.utils import storage_endpoint_url
 from coding_agent_bench import VERSION
 
 

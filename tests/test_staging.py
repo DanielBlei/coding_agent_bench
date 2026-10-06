@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from coding_agent_bench import staging
+from coding_agent_bench.utils import storage_endpoint_url
 
 
 def test_aws_uses_configured_storage_endpoint(monkeypatch):
@@ -28,7 +29,7 @@ def test_aws_uses_configured_storage_endpoint(monkeypatch):
 
 def test_storage_endpoint_defaults_to_rustfs(monkeypatch):
     monkeypatch.delenv("STORAGE_ENDPOINT_URL", raising=False)
-    assert staging.storage_endpoint_url() == "http://harbor-storage:9000"
+    assert storage_endpoint_url() == "http://harbor-storage:9000"
 
 
 def mock_storage(monkeypatch, manifest, delete_error=False):

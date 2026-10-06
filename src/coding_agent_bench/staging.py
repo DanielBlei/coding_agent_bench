@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from coding_agent_bench.storage import storage_endpoint_url
+from coding_agent_bench.utils import storage_endpoint_url
 
 
 BUCKET = "results-staging"

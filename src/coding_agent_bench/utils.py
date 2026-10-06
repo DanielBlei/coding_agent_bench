@@ -6,6 +6,14 @@ from pathlib import Path
 from harbor.skills import resolve_repo_source
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+DEFAULT_STORAGE_ENDPOINT_URL = "http://harbor-storage:9000"
+
+
+def storage_endpoint_url() -> str:
+    """Return the configured storage API endpoint, with an in-cluster default."""
+    configured = os.environ.get("STORAGE_ENDPOINT_URL", "").strip().rstrip("/")
+    return configured or DEFAULT_STORAGE_ENDPOINT_URL
+
 
 def cmd_to_string(cmd: list[str]):
     """Format a bash command as a string."""
@@ -60,4 +68,3 @@ def parse_envs(envs: str | None) -> dict[str, str]:
 def envs_to_export_lines(envs: dict[str, str]) -> str:
     """Format env vars as `export KEY=VALUE` lines, for display purposes only."""
     return "\n".join(f"export {key}={shlex.quote(value)}" for key, value in envs.items())
-
