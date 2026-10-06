@@ -268,6 +268,11 @@ def test_generated_preparation_steps_execute_with_quoted_paths(tmp_path):
     assert restored["agents"][0]["env"]["OPENAI_BASE_URL"] == "https://new.example.com/v1"
 
 
+def test_resume_shell_uses_storage_endpoint_from_job_environment():
+    shell = api._build_resume_shell_command("benchmark", "attempt", ["RuntimeError"], None)
+    assert '--endpoint-url "$STORAGE_ENDPOINT_URL"' in shell
+
+
 @pytest.mark.parametrize("original_name", ["benchmark", "benchmark--resume"])
 def test_repeated_manual_resumes_keep_the_original_artifact_prefix(store, original_name):
     store.insert("first", original_name, "oracle", "dataset", "model", "https://model.example.com", [])

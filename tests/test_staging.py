@@ -1,11 +1,35 @@
-"""Ownership and partial-deletion guards for MinIO snapshot cleanup."""
+"""Ownership and partial-deletion guards for object-storage snapshot cleanup."""
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from coding_agent_bench import staging
+from coding_agent_bench.utils import storage_endpoint_url
+
+
+def test_aws_uses_configured_storage_endpoint(monkeypatch):
+    monkeypatch.setenv("STORAGE_ENDPOINT_URL", "https://storage.example.test:9443/")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout="{}")
+
+    monkeypatch.setattr(staging.subprocess, "run", run)
+
+    assert staging._aws("s3api", "list-objects-v2") == "{}"
+    assert calls[0][0] == [
+        "aws", "--endpoint-url", "https://storage.example.test:9443",
+        "s3api", "list-objects-v2",
+    ]
+
+
+def test_storage_endpoint_defaults_to_rustfs(monkeypatch):
+    monkeypatch.delenv("STORAGE_ENDPOINT_URL", raising=False)
+    assert storage_endpoint_url() == "http://harbor-storage:9000"
 
 
 def mock_storage(monkeypatch, manifest, delete_error=False):

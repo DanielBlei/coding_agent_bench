@@ -8,9 +8,11 @@ import os
 import json
 
 from coding_agent_bench.preemption import PAUSE_REQUEST_PATH
+from coding_agent_bench.utils import storage_endpoint_url
+from coding_agent_bench import VERSION
 
 
-DEFAULT_CODING_AGENT_BENCH_IMAGE = "ghcr.io/redhat-et/coding_agent_bench:v0.2.6"
+DEFAULT_CODING_AGENT_BENCH_IMAGE = f"ghcr.io/redhat-et/coding_agent_bench:v{VERSION}"
 
 
 def _job_image() -> str:
@@ -85,6 +87,7 @@ class OpenshiftJob:
                                     {"name": "HOME", "value": "/tmp"},
                                     {"name": "HARBOR_PARENT", "value": self._pod_name},
                                     {"name": "CAB_PAUSE_REQUEST_PATH", "value": PAUSE_REQUEST_PATH},
+                                    {"name": "STORAGE_ENDPOINT_URL", "value": storage_endpoint_url()},
                                 ],
                                 "volumeMounts": [{"name": "jobs", "mountPath": "/app/jobs"}],
                                 "envFrom": [
@@ -120,6 +123,7 @@ class OpenshiftJob:
         env: list[dict] = [
             {"name": "HARBOR_PARENT", "value": self._pod_name},
             {"name": "CAB_PAUSE_REQUEST_PATH", "value": PAUSE_REQUEST_PATH},
+            {"name": "STORAGE_ENDPOINT_URL", "value": storage_endpoint_url()},
         ]
         if openrouter:
             env.append(
@@ -159,14 +163,14 @@ class OpenshiftJob:
                                     + " AWS_SECRET_ACCESS_KEY=\"$STORAGE_SECRET_KEY\""
                                     + " AWS_DEFAULT_REGION=us-east-1"
                                     + " AWS_EC2_METADATA_DISABLED=true"
-                                    + " && (uv run --no-sync --no-cache aws --endpoint-url http://harbor-storage:9000"
+                                    + " && (uv run --no-sync --no-cache aws --endpoint-url \"$STORAGE_ENDPOINT_URL\""
                                     + " s3api head-bucket --bucket results >/dev/null 2>&1"
-                                    + " || uv run --no-sync --no-cache aws --endpoint-url http://harbor-storage:9000"
+                                    + " || uv run --no-sync --no-cache aws --endpoint-url \"$STORAGE_ENDPOINT_URL\""
                                     + " s3 mb s3://results"
                                     # A concurrent job may have created the bucket first.
-                                    + " || uv run --no-sync --no-cache aws --endpoint-url http://harbor-storage:9000"
+                                    + " || uv run --no-sync --no-cache aws --endpoint-url \"$STORAGE_ENDPOINT_URL\""
                                     + " s3api head-bucket --bucket results)"
-                                    + " && uv run --no-sync --no-cache aws --endpoint-url http://harbor-storage:9000"
+                                    + " && uv run --no-sync --no-cache aws --endpoint-url \"$STORAGE_ENDPOINT_URL\""
                                     + " s3 cp --recursive /app/jobs/ s3://results/"
                                     + " || exit $?; exit \"$harbor_rc\""
                                 ],
@@ -311,7 +315,7 @@ class OpenshiftJob:
         OpenshiftEnvironment.stop).
 
         Waits up to wait_seconds for the pod to exit; the pod's script
-        uploads results to MinIO after harbor returns, so pausing passes a
+        uploads results to object storage after harbor returns, so pausing passes a
         budget large enough to cover that upload before the job is deleted.
         Returns True if the pod reached a terminal phase within the budget,
         False if it was still running when the wait expired (the checkpoint
