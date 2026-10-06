@@ -56,6 +56,8 @@ spec:
         env:
         - name: ENVIRONMENT
           value: stage
+        - name: STORAGE_ENDPOINT_URL
+          value: http://harbor-storage:9000
         - name: HOME
           value: /tmp
         - name: UV_CACHE_DIR

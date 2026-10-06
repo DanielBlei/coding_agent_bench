@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from coding_agent_bench.utils import storage_endpoint_url
+
 
 BUCKET = "results-staging"
 PHASES = ("original", "updated")
@@ -27,7 +29,7 @@ def snapshot_manifest(job_dir: Path, job_name: str, attempt: str, phase: str) ->
 def _aws(*args: str) -> str:
     """Use the worker's configured AWS credentials and installed CLI."""
     return subprocess.run(
-        ["aws", "--endpoint-url", "http://harbor-minio:9000", *args],
+        ["aws", "--endpoint-url", storage_endpoint_url(), *args],
         check=True, capture_output=True, text=True, timeout=120,
     ).stdout
 

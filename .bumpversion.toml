@@ -1,5 +1,5 @@
 [tool.bumpversion]
-current_version = "0.2.7"
+current_version = "0.2.8"
 commit = true
 tag = true
 tag_name = "v{new_version}"
@@ -9,11 +9,6 @@ pre_commit_hooks = ["uv lock"]
 filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
-
-[[tool.bumpversion.files]]
-filename = "src/coding_agent_bench/job.py"
-search = 'DEFAULT_CODING_AGENT_BENCH_IMAGE = "ghcr.io/redhat-et/coding_agent_bench:v{current_version}"'
-replace = 'DEFAULT_CODING_AGENT_BENCH_IMAGE = "ghcr.io/redhat-et/coding_agent_bench:v{new_version}"'
 
 [[tool.bumpversion.files]]
 filename = "deploy/job-queue/overlays/prod/kustomization.yaml"
