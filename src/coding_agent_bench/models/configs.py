@@ -95,6 +95,8 @@ class RedHatAI_Qwen3_6_27B_FP8(ModelConfig):
 class RedHatAI_GLM_5_2_FP8(ModelConfig):
     # Verified: 8x H200 141GB, concurrency 2.23x at 262K context
     # Note: cannot fit 1M context on 8x H200 (needs 52.68 GiB KV, only 23.78 GiB available)
+    # Verified: 8x B200 183GB, concurrency 5.53x at 262K / 1.23x at 1M (vLLM 0.24.0)
+    # 1M fits on B200 but has very low concurrency; configured limit remains 262K.
 
     name = "RedHatAI/GLM-5.2-FP8"
     model_max_len = 262144
@@ -211,5 +213,4 @@ class poolside_Laguna_S_2_1_NVFP4(ModelConfig):
         "--tool-call-parser", "poolside_v1",
         "--default-chat-template-kwargs", '{"enable_thinking": true}',
     ]
-
 
