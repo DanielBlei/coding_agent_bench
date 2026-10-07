@@ -12,4 +12,5 @@ class ModelConfig(ABC):
         "--async-scheduling",
         "--enable-chunked-prefill",
         "--enable-prefix-caching",
+        "--enable-prompt-tokens-details",
     ]
