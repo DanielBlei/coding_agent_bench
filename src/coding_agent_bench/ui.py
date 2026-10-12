@@ -119,6 +119,28 @@ function validateForm() {{
     if (modelMaxLen && (isNaN(modelMaxLen) || parseInt(modelMaxLen) < 1)) {{
         errors.push('model_max_len must be a positive integer');
     }}
+    const timeoutMultiplier = document.getElementById('agent_timeout_multiplier').value.trim();
+    if (timeoutMultiplier && (isNaN(timeoutMultiplier) || parseFloat(timeoutMultiplier) <= 0)) {{
+        errors.push('agent_timeout_multiplier must be a positive number');
+    }}
+    const maxRetries = document.getElementById('max_retries').value.trim();
+    if (maxRetries && (isNaN(maxRetries) || parseInt(maxRetries) < 0)) {{
+        errors.push('max_retries must be a non-negative integer');
+    }}
+
+    // Validate KEY=VALUE textareas (agent_env, agent_kwargs, env_kwargs, harbor_envs)
+    for (const [fieldId, label] of [
+        ['agent_env', 'Agent env'],
+        ['agent_kwargs', 'Agent kwargs'],
+        ['env_kwargs', 'Env kwargs'],
+        ['harbor_envs', 'Harbor envs'],
+    ]) {{
+        for (const line of parseKeyValueLines(fieldId)) {{
+            if (!line.includes('=')) {{
+                errors.push(label + ' entries must be in KEY=VALUE format: ' + line);
+            }}
+        }}
+    }}
 
     if (errors.length > 0) {{
         alert('Validation errors:\\n' + errors.join('\\n'));
@@ -137,6 +159,22 @@ function updateJobName() {{
     const agent = document.getElementById('agent').value;
     const jobName = [modelName, dataset, agent].map(sanitizeJobNamePart).join('-');
     document.getElementById('job_name').value = jobName;
+}}
+
+function parseKeyValueLines(fieldId) {{
+    // Values may themselves contain commas (e.g. JSON), so only newlines separate entries.
+    return document.getElementById(fieldId).value
+        .split(/\\r?\\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+}}
+
+function parseListField(fieldId) {{
+    // Hosts and error-type names never contain commas, so accept both separators.
+    return document.getElementById(fieldId).value
+        .split(/[\\n,]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
 }}
 
 async function submitJob(event) {{
@@ -187,6 +225,30 @@ async function submitJob(event) {{
         .map((skill) => skill.trim())
         .filter(Boolean);
     if (skills.length) formData.skills = skills;
+
+    const agentEnv = parseKeyValueLines('agent_env');
+    if (agentEnv.length) formData.agent_env = agentEnv;
+
+    const agentKwargs = parseKeyValueLines('agent_kwargs');
+    if (agentKwargs.length) formData.agent_kwargs = agentKwargs;
+
+    const envKwargs = parseKeyValueLines('env_kwargs');
+    if (envKwargs.length) formData.env_kwargs = envKwargs;
+
+    const harborEnvs = parseKeyValueLines('harbor_envs');
+    if (harborEnvs.length) formData.harbor_envs = harborEnvs;
+
+    const retryInclude = parseListField('retry_include');
+    if (retryInclude.length) formData.retry_include = retryInclude;
+
+    const allowAgentHost = parseListField('allow_agent_host');
+    if (allowAgentHost.length) formData.allow_agent_host = allowAgentHost;
+
+    const timeoutMultiplier = document.getElementById('agent_timeout_multiplier').value.trim();
+    if (timeoutMultiplier) formData.agent_timeout_multiplier = parseFloat(timeoutMultiplier);
+
+    const maxRetries = document.getElementById('max_retries').value.trim();
+    if (maxRetries !== '') formData.max_retries = parseInt(maxRetries);
 
     try {{
         const apiKey = localStorage.getItem('coding_agent_bench_api_key');
@@ -394,6 +456,60 @@ def _build_advanced_fields_html(nebius_configs: list[str], nebius_enabled: bool)
             <textarea id="before_script" name="before_script" rows="3"
                       style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
                       placeholder="Commands to run before execution..."></textarea>
+        </div>
+        <div>
+            <label for="agent_timeout_multiplier" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Agent Timeout Multiplier</label>
+            <input type="number" id="agent_timeout_multiplier" name="agent_timeout_multiplier" min="0.1" step="0.5"
+                   style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"
+                   placeholder="Leave empty for default">
+        </div>
+        <div>
+            <label for="max_retries" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Max Retries</label>
+            <input type="number" id="max_retries" name="max_retries" min="0"
+                   style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"
+                   placeholder="Leave empty for default (1)">
+        </div>
+        <div>
+            <label for="retry_include" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Retry Error Types</label>
+            <textarea id="retry_include" name="retry_include" rows="2"
+                      style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
+                      placeholder="One per line or comma-separated, e.g. AgentTimeoutError"></textarea>
+            <small style="color: #666;">Error types to retry (Harbor's --retry-include). Leave empty for defaults.</small>
+        </div>
+        <div>
+            <label for="allow_agent_host" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Allow Agent Hosts</label>
+            <textarea id="allow_agent_host" name="allow_agent_host" rows="2"
+                      style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
+                      placeholder="One per line or comma-separated, e.g. api.example.com"></textarea>
+            <small style="color: #666;">Extra hostnames/IPs/CIDRs for the agent-phase network allowlist (Harbor's --allow-agent-host).</small>
+        </div>
+        <div style="grid-column: 1 / -1;">
+            <label for="agent_env" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Agent Env Vars (--ae)</label>
+            <textarea id="agent_env" name="agent_env" rows="3"
+                      style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
+                      placeholder="One KEY=VALUE per line; overrides agent-config values, e.g.&#10;ANTHROPIC_BASE_URL=https://gateway.example&#10;CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000"></textarea>
+            <small style="color: #666;">Passed to Harbor's --ae. Values are stored with the job and visible in its command.</small>
+        </div>
+        <div style="grid-column: 1 / -1;">
+            <label for="agent_kwargs" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Agent Kwargs (--ak)</label>
+            <textarea id="agent_kwargs" name="agent_kwargs" rows="2"
+                      style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
+                      placeholder="One key=value per line, e.g. reasoning_effort=high"></textarea>
+            <small style="color: #666;">Passed to Harbor's --ak; overrides agent-config kwargs on key collision.</small>
+        </div>
+        <div style="grid-column: 1 / -1;">
+            <label for="env_kwargs" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Environment Kwargs (--ek)</label>
+            <textarea id="env_kwargs" name="env_kwargs" rows="2"
+                      style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
+                      placeholder="One key=value per line, e.g. namespace=my-namespace"></textarea>
+            <small style="color: #666;">Passed to Harbor's --ek (environment kwargs).</small>
+        </div>
+        <div style="grid-column: 1 / -1;">
+            <label for="harbor_envs" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Harbor Process Env Vars (--envs)</label>
+            <textarea id="harbor_envs" name="harbor_envs" rows="2"
+                      style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
+                      placeholder="One KEY=VALUE per line, e.g. DATA_ROOT=/path/to/data"></textarea>
+            <small style="color: #666;">Environment variables for the harbor process itself. Values are stored with the job and visible in its command.</small>
         </div>
     """
 

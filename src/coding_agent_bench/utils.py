@@ -44,25 +44,53 @@ def is_stage_environment() -> bool:
     return environment == "stage"
 
 
-def parse_envs(envs: str | None) -> dict[str, str]:
-    """Parse a comma-separated `key=value,key=value` string into a dict."""
+def parse_envs(envs: str | list[str] | None) -> dict[str, str]:
+    """Parse repeatable `key=value` entries into a dict.
+
+    Each entry may itself be a comma-separated `key=value,key=value` string,
+    preserving the original single-flag form. Later entries override earlier
+    ones on key collision.
+    """
     if not envs:
         return {}
+    entries = [envs] if isinstance(envs, str) else envs
     parsed = {}
-    for pair in envs.split(","):
-        pair = pair.strip()
-        if not pair:
-            continue
-        if "=" not in pair:
-            raise ValueError(f"Invalid --envs entry (expected key=value): {pair!r}")
-        key, value = pair.split("=", 1)
-        key = key.strip()
-        if not _ENV_KEY_RE.match(key):
-            raise ValueError(
-                f"Invalid --envs entry (variable name must match [A-Za-z_][A-Za-z0-9_]*): {pair!r}"
-            )
-        parsed[key] = value
+    for entry in entries:
+        for pair in entry.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            if "=" not in pair:
+                raise ValueError(f"Invalid --envs entry (expected key=value): {pair!r}")
+            key, value = pair.split("=", 1)
+            key = key.strip()
+            if not _ENV_KEY_RE.match(key):
+                raise ValueError(
+                    f"Invalid --envs entry (variable name must match [A-Za-z_][A-Za-z0-9_]*): {pair!r}"
+                )
+            parsed[key] = value
     return parsed
+
+
+def validate_key_value_entries(
+    entries: list[str] | None, flag: str, *, env_keys: bool = False
+) -> None:
+    """Validate repeatable KEY=VALUE passthrough entries for a CLI flag.
+
+    Values are passed to Harbor verbatim; only the key side is checked. Empty
+    values (`KEY=`) are legal. With `env_keys=True` the key must also be a valid
+    environment variable name.
+    """
+    for entry in entries or []:
+        if "=" not in entry:
+            raise ValueError(f"Invalid {flag} entry (expected key=value): {entry!r}")
+        key = entry.split("=", 1)[0].strip()
+        if not key:
+            raise ValueError(f"Invalid {flag} entry (empty key): {entry!r}")
+        if env_keys and not _ENV_KEY_RE.match(key):
+            raise ValueError(
+                f"Invalid {flag} entry (variable name must match [A-Za-z_][A-Za-z0-9_]*): {entry!r}"
+            )
 
 
 def envs_to_export_lines(envs: dict[str, str]) -> str:

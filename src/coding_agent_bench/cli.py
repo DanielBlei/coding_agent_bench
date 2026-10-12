@@ -13,7 +13,13 @@ from coding_agent_bench.job import OpenshiftJob
 from coding_agent_bench.providers import is_openrouter
 from coding_agent_bench.manifest import deploy as deploy_model
 from coding_agent_bench.manifest import generate
-from coding_agent_bench.utils import cmd_to_string, envs_to_export_lines, parse_envs, validate_remote_skill_sources
+from coding_agent_bench.utils import (
+    cmd_to_string,
+    envs_to_export_lines,
+    parse_envs,
+    validate_key_value_entries,
+    validate_remote_skill_sources,
+)
 
 app = typer.Typer()
 
@@ -71,9 +77,26 @@ def run(
         Optional[float],
         typer.Option(help="Multiplier for the task's agent execution timeout (Harbor's --agent-timeout-multiplier)"),
     ] = None,
-    thinking: Annotated[
-        Optional[str],
-        typer.Option(help="Agent thinking/reasoning level, e.g. off, minimal, low, medium, high, xhigh (agent-dependent; passed as --ak thinking=<value>)"),
+    agent_env: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--ae", "--agent-env",
+            help="Agent environment variable in KEY=VALUE format, passed to Harbor's --ae (repeatable). Overrides values set by the agent config.",
+        ),
+    ] = None,
+    agent_kwargs: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--ak", "--agent-kwarg",
+            help="Agent kwarg in key=value format, passed to Harbor's --ak (repeatable). Overrides kwargs set by the agent config.",
+        ),
+    ] = None,
+    env_kwargs: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--ek", "--env-kwarg",
+            help="Environment kwarg in key=value format, passed to Harbor's --ek (repeatable).",
+        ),
     ] = None,
     allow_agent_host: Annotated[
         Optional[list[str]],
@@ -82,8 +105,10 @@ def run(
         ),
     ] = None,
     envs: Annotated[
-        Optional[str],
-        typer.Option(help="Extra environment variables for the harbor process, comma-separated key=value pairs (e.g. --envs FOO=bar,BAZ=qux)"),
+        Optional[list[str]],
+        typer.Option(
+            help="Extra environment variables for the harbor process, KEY=VALUE entries (repeatable; each entry may also contain comma-separated pairs, e.g. --envs FOO=bar --envs BAZ=qux)"
+        ),
     ] = None,
     dry_run: Annotated[
         bool, typer.Option(help="Dry run mode, does not execute the job")
@@ -99,6 +124,16 @@ def run(
     except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise SystemExit(1) from e
+    for flag, entries, env_keys in (
+        ("--ae", agent_env, True),
+        ("--ak", agent_kwargs, False),
+        ("--ek", env_kwargs, False),
+    ):
+        try:
+            validate_key_value_entries(entries, flag, env_keys=env_keys)
+        except ValueError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise SystemExit(1) from e
     
     # If remote, run as a job
     if remote:
@@ -148,8 +183,10 @@ def run(
             retry_include=retry_include,
             skills=skills,
             agent_timeout_multiplier=agent_timeout_multiplier,
-            thinking=thinking,
             allow_agent_host=allow_agent_host,
+            extra_agent_env=agent_env,
+            extra_agent_kwargs=agent_kwargs,
+            extra_env_kwargs=env_kwargs,
         )
         preview = ""
         if dry_run:
