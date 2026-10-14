@@ -11,8 +11,8 @@
 
 ## Results (avg of 2 runs)
 
-**Score:** 42.7% (14 Full Reward / 10 Partial Reward / 17 Zero Reward / 0 Errors)   
-**Error Rate:** 0.0% (1 UnknownApiErrors)  
+**Score:** 42.7% (13.5 Full Reward / 9.5 Partial Reward / 17 Zero Reward / 0.5 Errors)   
+**Error Rate:** 1.25% (1 UnknownApiErrors)  
 **Total Time:** 04h 11m 22s  
 **Agent Time:** 03h 44m 09s (00h 13m 33s avg per task)  
 **Estimated Cost:** $41.85  ($1.05 avg per task)  

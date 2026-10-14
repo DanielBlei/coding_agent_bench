@@ -11,7 +11,7 @@
 
 ## Results (avg of 2 runs)
 
-**Score:** 37.9% (13 Full Reward / 6 Partial Reward / 22 Zero Reward / 0 Errors)   
+**Score:** 37.9% (13 Full Reward / 5.5 Partial Reward / 21.5 Zero Reward / 0 Errors)   
 **Error Rate:** 0.0% ()  
 **Total Time:** 02h 05m 39s  
 **Agent Time:** 01h 43m 52s (00h 07m 47s avg per task)  
