@@ -183,8 +183,8 @@ def test_create_profile_updates_existing_profile(monkeypatch, tmp_path):
 
     async def instance_exec(args):
         commands.append(args)
-        if args == ["profile", "list"]:
-            return "service-account [default]"
+        if args[:2] == ["profile", "create"]:
+            raise RuntimeError("Profile already exists")
         return "updated"
 
     monkeypatch.setattr(manager, "exec", instance_exec)
@@ -195,11 +195,8 @@ def test_create_profile_updates_existing_profile(monkeypatch, tmp_path):
 
     assert result == "updated"
     assert commands == [
-        ["profile", "list"],
         [
-            "profile",
-            "update",
-            "service-account",
+            "profile", "create",
             "--endpoint",
             "api.nebius.cloud",
             "--parent-id",
@@ -208,11 +205,20 @@ def test_create_profile_updates_existing_profile(monkeypatch, tmp_path):
             "tenant-1",
             "--service-account-file",
             str(tmp_path / "credentials.json"),
+            "--profile",
+            "service-account",
+        ],
+        [
+            "profile", "update", "service-account",
+            "--endpoint", "api.nebius.cloud",
+            "--parent-id", "project-1",
+            "--tenant-id", "tenant-1",
+            "--service-account-file", str(tmp_path / "credentials.json"),
         ],
     ]
 
 
-def test_create_profile_creates_missing_profile(monkeypatch, tmp_path):
+def test_create_profile_bootstraps_fresh_nebius_config(monkeypatch, tmp_path):
     manager = object.__new__(NebiusInstanceManager)
     manager._parent_id = "project-1"
     manager._tenant_id = "tenant-1"
@@ -220,6 +226,7 @@ def test_create_profile_creates_missing_profile(monkeypatch, tmp_path):
 
     async def instance_exec(args):
         commands.append(args)
+        assert args[:2] == ["profile", "create"]
         return "created"
 
     monkeypatch.setattr(manager, "exec", instance_exec)
@@ -229,8 +236,14 @@ def test_create_profile_creates_missing_profile(monkeypatch, tmp_path):
     )
 
     assert result == "created"
-    assert commands[0] == ["profile", "list"]
-    assert commands[1][-2:] == ["--profile", "service-account"]
+    assert commands == [[
+        "profile", "create",
+        "--endpoint", "api.nebius.cloud",
+        "--parent-id", "project-1",
+        "--tenant-id", "tenant-1",
+        "--service-account-file", str(tmp_path / "credentials.json"),
+        "--profile", "service-account",
+    ]]
 
 
 def test_init_activates_the_profile(monkeypatch, tmp_path):
