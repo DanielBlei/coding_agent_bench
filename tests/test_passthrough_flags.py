@@ -1,4 +1,4 @@
-"""Tests for the --ae/--ak/--ek Harbor passthrough flags and frontend parity."""
+"""Tests for arbitrary Harbor argument passthrough."""
 
 import os
 import tempfile
@@ -16,385 +16,202 @@ os.environ.setdefault(
 
 from coding_agent_bench.api import CreateJobRequest, build_cli_command
 from coding_agent_bench.builder import HarborCommandBuilder, SupportedAgent
-from coding_agent_bench.cli import app
-from coding_agent_bench.utils import parse_envs, validate_key_value_entries
+from coding_agent_bench.cli import app, get_cab_option_names
+from coding_agent_bench.ui import build_submit_form_html
+from coding_agent_bench.utils import (
+    parse_extra_harbor_lines,
+    validate_extra_harbor_flags,
+)
 
 
-def _flag_pairs(command: list[str], flag: str) -> list[list[str]]:
-    """Collect [flag, value] pairs for a repeatable flag, in order."""
-    return [
-        command[index : index + 2]
-        for index, value in enumerate(command)
-        if value == flag
-    ]
+def _request(**overrides) -> CreateJobRequest:
+    values = dict(
+        job_name="passthrough-test",
+        agent=SupportedAgent.oracle,
+        dataset="example/dataset",
+        model_name="example-model",
+        server_url="http://model.example",
+    )
+    values.update(overrides)
+    return CreateJobRequest(**values)
+
+
+class ParsingTests(unittest.TestCase):
+    def test_lines_are_split_into_ordered_tokens(self):
+        self.assertEqual(
+            parse_extra_harbor_lines(
+                ["--future=value", "--ae 'KEY=value with spaces'", "--boolean"]
+            ),
+            ["--future=value", "--ae", "KEY=value with spaces", "--boolean"],
+        )
+
+    def test_malformed_quotes_are_rejected(self):
+        with pytest.raises(ValueError, match="Invalid extra Harbor flags line"):
+            parse_extra_harbor_lines(["--future 'unterminated"])
+
+    def test_policy_uses_dynamic_cab_options(self):
+        self.assertIn("--agent", get_cab_option_names())
+        with pytest.raises(ValueError, match="already supported"):
+            validate_extra_harbor_flags(["--agent=oracle"], get_cab_option_names())
+
+    def test_generated_harbor_flags_are_blocked(self):
+        blocked = [
+            "--env",
+            "-e",
+            "--model",
+            "-m",
+            "--path",
+            "-p",
+            "--dataset",
+            "-d",
+            "--mounts-json",
+            "--plugin",
+            "--jobs-dir",
+            "-o",
+        ]
+        for flag in blocked:
+            with self.subTest(flag=flag):
+                with pytest.raises(ValueError, match="blocked"):
+                    validate_extra_harbor_flags([f"{flag}=value"], set())
+
+    def test_short_blocked_flags_with_attached_values_are_rejected(self):
+        with pytest.raises(ValueError, match="blocked"):
+            validate_extra_harbor_flags(["-o/tmp/other"], set())
+        with pytest.raises(ValueError, match="blocked"):
+            validate_extra_harbor_flags(["-p/tasks"], set())
+
+    def test_future_blocked_flags_can_be_added_to_policy(self):
+        from coding_agent_bench import utils
+
+        with patch.object(utils, "BLOCKED_HARBOR_FLAGS", frozenset({"--blocked"})):
+            with pytest.raises(ValueError, match="blocked"):
+                validate_extra_harbor_flags(["--blocked=value"], set())
 
 
 class BuilderPassthroughTests(unittest.TestCase):
-    def test_user_agent_env_follows_config_env_and_wins_collisions(self):
-        command = HarborCommandBuilder()._build_command(
-            agent="claude-code",
-            dataset="example/dataset",
-            model="example-model",
-            environment="docker",
-            agent_env={"ANTHROPIC_BASE_URL": "http://config:8000", "EXTRA": "1"},
-            extra_agent_env=[
-                "ANTHROPIC_BASE_URL=${ENMAAS_API_ORIGIN}",
-                "CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000",
-            ],
-        )
-
-        pairs = _flag_pairs(command, "--ae")
-        self.assertEqual(
-            pairs,
-            [
-                ["--ae", "ANTHROPIC_BASE_URL=http://config:8000"],
-                ["--ae", "EXTRA=1"],
-                # User entries come last so Harbor's last-wins parsing
-                # lets them override the config value.
-                ["--ae", "ANTHROPIC_BASE_URL=${ENMAAS_API_ORIGIN}"],
-                ["--ae", "CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000"],
-            ],
-        )
-
-    def test_user_agent_kwargs_follow_config_kwargs_and_version_pin(self):
-        command = HarborCommandBuilder()._build_command(
-            agent="claude-code",
-            dataset="example/dataset",
-            model="example-model",
-            environment="docker",
-            agent_kwargs={"reasoning_effort": "low"},
-            extra_agent_kwargs=["reasoning_effort=high"],
-        )
-
-        pairs = _flag_pairs(command, "--ak")
-        # The version pin is emitted first, config kwargs next, user entries last.
-        version_values = [pair[1] for pair in pairs if pair[1].startswith("version=")]
-        self.assertTrue(version_values)  # claude-code pins a version
-        self.assertEqual(pairs[-1], ["--ak", "reasoning_effort=high"])
-
-    def test_user_env_kwargs_follow_generated_persistent_env(self):
-        with patch.dict(os.environ, {"HARBOR_PARENT": "parent-pod"}):
-            command = HarborCommandBuilder()._build_command(
-                agent="oracle",
-                dataset="example/dataset",
-                model="example-model",
-                environment="openshift",
-                extra_env_kwargs=["namespace=sre-leaderboard-test", "nft_redir_init=True"],
-            )
-
-        pairs = _flag_pairs(command, "--ek")
-        self.assertTrue(pairs[0][1].startswith("persistent_env="))
-        self.assertIn("parent-pod", pairs[0][1])
-        self.assertEqual(
-            pairs[1:],
-            [
-                ["--ek", "namespace=sre-leaderboard-test"],
-                ["--ek", "nft_redir_init=True"],
-            ],
-        )
-
-    def test_passthrough_values_stay_verbatim(self):
+    def test_extra_args_are_appended_after_generated_arguments(self):
         command = HarborCommandBuilder()._build_command(
             agent="oracle",
             dataset="example/dataset",
             model="example-model",
             environment="docker",
-            extra_agent_env=["ANTHROPIC_API_KEY=${ENMAAS_KEY}"],
-            extra_agent_kwargs=["persistent_env={\"a\": 1, \"b\": 2}"],
+            extra_harbor_args=["--future=value", "--boolean"],
         )
+        self.assertEqual(command.index("--future=value"), len(command) - 2)
+        self.assertEqual(command[-1], "--boolean")
 
-        self.assertIn(
-            ["--ae", "ANTHROPIC_API_KEY=${ENMAAS_KEY}"], _flag_pairs(command, "--ae")
-        )
-        self.assertIn(
-            ["--ak", 'persistent_env={"a": 1, "b": 2}'], _flag_pairs(command, "--ak")
-        )
-
-    def test_no_passthrough_flags_without_entries(self):
-        command = HarborCommandBuilder()._build_command(
-            agent="oracle",
-            dataset="example/dataset",
-            model="example-model",
-            environment="docker",
-        )
-
-        self.assertNotIn("--ae", command)
-        self.assertNotIn("--ak", command)
-        self.assertNotIn("--ek", command)
-
-    def test_build_forwards_passthrough_lists(self):
-        with patch.object(
-            HarborCommandBuilder,
-            "_build_command",
-            return_value=["harbor", "run"],
-        ) as build_command:
+    def test_build_forwards_extra_args(self):
+        with patch.object(HarborCommandBuilder, "_build_command", return_value=["harbor", "run"]) as build:
             HarborCommandBuilder().build(
                 agent="oracle",
                 dataset="example/dataset",
                 model_name="example-model",
                 server_url="http://model.example",
                 environment="docker",
-                extra_agent_env=["FOO=bar"],
-                extra_agent_kwargs=["thinking=high"],
-                extra_env_kwargs=["namespace=ns"],
+                extra_harbor_args=["--future=value"],
             )
-
-        self.assertEqual(build_command.call_args.kwargs["extra_agent_env"], ["FOO=bar"])
-        self.assertEqual(
-            build_command.call_args.kwargs["extra_agent_kwargs"], ["thinking=high"]
-        )
-        self.assertEqual(
-            build_command.call_args.kwargs["extra_env_kwargs"], ["namespace=ns"]
-        )
+        self.assertEqual(build.call_args.kwargs["extra_harbor_args"], ["--future=value"])
 
 
 class CliPassthroughTests(unittest.TestCase):
-    def setUp(self):
-        self.runner = CliRunner()
-        self.required_args = [
-            "--agent",
-            "oracle",
-            "--dataset",
-            "example/dataset",
-            "--model-name",
-            "example-model",
-            "--server-url",
-            "http://model.example",
-        ]
+    required = [
+        "run", "--agent", "oracle", "--dataset", "example/dataset",
+        "--model-name", "example-model", "--server-url", "http://model.example",
+        "--dry-run",
+    ]
 
-    def test_cli_forwards_repeatable_passthrough_flags(self):
+    def test_unknown_options_are_captured_without_wrapper_flag(self):
         with patch.object(
-            HarborCommandBuilder,
-            "build",
-            return_value=(["harbor", "run"], Path("jobs/test")),
+            HarborCommandBuilder, "build", return_value=([] , Path("jobs/test"))
         ) as build:
-            result = self.runner.invoke(
+            result = CliRunner().invoke(
                 app,
-                [
-                    "run",
-                    *self.required_args,
-                    "--ae", "FOO=bar",
-                    "--agent-env", "BAZ=qux",
-                    "--ak", "thinking=high",
-                    "--agent-kwarg", "version=9.9.9",
-                    "--ek", "namespace=ns",
-                    "--env-kwarg", "nft_redir_init=True",
-                    "--dry-run",
+                self.required
+                + [
+                    "--future=value",
+                    "--boolean",
+                    "--agent-timeout-multiplier=3",
+                    "--allow-agent-host=api.example.com",
                 ],
             )
-
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(
-            build.call_args.kwargs["extra_agent_env"], ["FOO=bar", "BAZ=qux"]
-        )
-        self.assertEqual(
-            build.call_args.kwargs["extra_agent_kwargs"],
-            ["thinking=high", "version=9.9.9"],
-        )
-        self.assertEqual(
-            build.call_args.kwargs["extra_env_kwargs"],
-            ["namespace=ns", "nft_redir_init=True"],
+            build.call_args.kwargs["extra_harbor_args"],
+            [
+                "--future=value",
+                "--boolean",
+                "--agent-timeout-multiplier=3",
+                "--allow-agent-host=api.example.com",
+            ],
         )
 
-    def test_cli_rejects_entry_without_separator(self):
-        result = self.runner.invoke(
-            app,
-            ["run", *self.required_args, "--ae", "NOT_AN_ENTRY", "--dry-run"],
-        )
-
+    def test_explicit_delimiter_can_repeat_a_cab_flag_and_is_rejected(self):
+        result = CliRunner().invoke(app, self.required + ["--", "--agent", "other"])
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("Invalid --ae entry", result.output)
+        self.assertIn("already supported", result.output)
 
-    def test_cli_rejects_invalid_env_var_name(self):
-        result = self.runner.invoke(
+    def test_duplicate_non_repeatable_options_are_rejected(self):
+        result = CliRunner().invoke(
             app,
-            ["run", *self.required_args, "--ae", "1BAD-KEY=value", "--dry-run"],
+            self.required[:-1]
+            + ["--server-url", "testing", "--dry-run"],
         )
-
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("Invalid --ae entry", result.output)
+        self.assertIn("provided more than once", str(result.exception))
 
-    def test_cli_accepts_empty_agent_env_value(self):
+    def test_repeatable_options_are_allowed(self):
         with patch.object(
-            HarborCommandBuilder,
-            "build",
-            return_value=(["harbor", "run"], Path("jobs/test")),
+            HarborCommandBuilder, "build", return_value=([], Path("jobs/test"))
         ) as build:
-            result = self.runner.invoke(
+            result = CliRunner().invoke(
                 app,
-                ["run", *self.required_args, "--ae", "ANTHROPIC_API_KEY=", "--dry-run"],
+                self.required[:-1]
+                + ["--dry-run", "--skill", "org/one", "--skill", "org/two"],
             )
-
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertEqual(
-            build.call_args.kwargs["extra_agent_env"], ["ANTHROPIC_API_KEY="]
-        )
+        self.assertEqual(build.call_args.kwargs["skills"], ["org/one", "org/two"])
 
-    def test_cli_envs_flag_is_repeatable_and_merges_comma_pairs(self):
+    def test_registered_options_still_parse_normally(self):
         with patch.object(
-            HarborCommandBuilder,
-            "build",
-            return_value=(["harbor", "run"], Path("jobs/test")),
-        ):
-            result = self.runner.invoke(
-                app,
-                [
-                    "run",
-                    *self.required_args,
-                    "--envs", "FOO=bar,BAZ=qux",
-                    "--envs", "QUX=1",
-                    "--dry-run",
-                ],
+            HarborCommandBuilder, "build", return_value=([], Path("jobs/test"))
+        ) as build:
+            result = CliRunner().invoke(
+                app, self.required[:-1] + ["--dry-run", "--n-tasks", "2"]
             )
-
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("export FOO=bar", result.output)
-        self.assertIn("export BAZ=qux", result.output)
-        self.assertIn("export QUX=1", result.output)
-
-    def test_cli_thinking_flag_is_removed(self):
-        result = self.runner.invoke(
-            app,
-            ["run", *self.required_args, "--thinking", "high", "--dry-run"],
-        )
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("--thinking", result.output)
+        self.assertEqual(build.call_args.kwargs["n_tasks"], 2)
+        self.assertEqual(build.call_args.kwargs["extra_harbor_args"], [])
 
 
 class QueuePassthroughTests(unittest.TestCase):
-    def _request(self, **overrides) -> CreateJobRequest:
-        defaults = dict(
-            job_name="passthrough-test",
-            agent=SupportedAgent.oracle,
-            dataset="example/dataset",
-            model_name="example-model",
-            server_url="http://model.example",
+    def test_queue_serializes_raw_args_without_wrapper_option(self):
+        command = build_cli_command(
+            _request(extra_harbor_flags=["--future=value", "--ae 'KEY=value with spaces'"])
         )
-        defaults.update(overrides)
-        return CreateJobRequest(**defaults)
-
-    def test_queue_command_serializes_each_passthrough_entry(self):
-        request = self._request(
-            agent_env=["ANTHROPIC_BASE_URL=https://gateway.example", "FOO=bar"],
-            agent_kwargs=["reasoning_effort=high"],
-            env_kwargs=["namespace=sre-leaderboard-test"],
-            harbor_envs=["DATA_ROOT=/data"],
-            agent_timeout_multiplier=3,
-            allow_agent_host=["api.enmaas.devshift.net", "downloads.claude.ai"],
-            max_retries=1,
-            retry_include=["UnknownApiError"],
-        )
-
-        command = build_cli_command(request)
-
+        delimiter = command.index("--")
         self.assertEqual(
-            _flag_pairs(command, "--ae"),
-            [
-                ["--ae", "ANTHROPIC_BASE_URL=https://gateway.example"],
-                ["--ae", "FOO=bar"],
-            ],
+            command[delimiter + 1 :],
+            ["--future=value", "--ae", "KEY=value with spaces"],
         )
-        self.assertEqual(
-            _flag_pairs(command, "--ak"), [["--ak", "reasoning_effort=high"]]
-        )
-        self.assertEqual(
-            _flag_pairs(command, "--ek"),
-            [["--ek", "namespace=sre-leaderboard-test"]],
-        )
-        self.assertEqual(_flag_pairs(command, "--envs"), [["--envs", "DATA_ROOT=/data"]])
-        self.assertEqual(
-            _flag_pairs(command, "--agent-timeout-multiplier"),
-            [["--agent-timeout-multiplier", "3.0"]],
-        )
-        self.assertEqual(
-            _flag_pairs(command, "--allow-agent-host"),
-            [
-                ["--allow-agent-host", "api.enmaas.devshift.net"],
-                ["--allow-agent-host", "downloads.claude.ai"],
-            ],
-        )
-        self.assertEqual(_flag_pairs(command, "--max-retries"), [["--max-retries", "1"]])
-        self.assertEqual(
-            _flag_pairs(command, "--retry-include"),
-            [["--retry-include", "UnknownApiError"]],
-        )
+        self.assertNotIn("--harbor-flag", command)
 
-    def test_queue_command_omits_unset_passthrough_flags(self):
-        command = build_cli_command(self._request())
-
-        for flag in ("--ae", "--ak", "--ek", "--envs", "--agent-timeout-multiplier",
-                     "--allow-agent-host", "--max-retries", "--retry-include"):
-            self.assertNotIn(flag, command)
-
-    def test_queue_rejects_env_entry_without_separator(self):
-        with pytest.raises(ValidationError) as excinfo:
-            self._request(agent_env=["ANTHROPIC_BASE_URL"])
-
-        self.assertIn("agent_env", str(excinfo.value))
-        self.assertIn("key=value", str(excinfo.value))
-
-    def test_queue_rejects_kwarg_entry_without_separator(self):
-        with pytest.raises(ValidationError) as excinfo:
-            self._request(env_kwargs=["namespace"])
-
-        self.assertIn("env_kwargs", str(excinfo.value))
-        self.assertIn("key=value", str(excinfo.value))
-
-    def test_queue_rejects_invalid_env_var_name(self):
-        with pytest.raises(ValidationError) as excinfo:
-            self._request(harbor_envs=["1BAD-KEY=value"])
-
-        self.assertIn("harbor_envs", str(excinfo.value))
-        self.assertIn("[A-Za-z_]", str(excinfo.value))
-
-    def test_queue_accepts_empty_env_value(self):
-        request = self._request(agent_env=["ANTHROPIC_API_KEY="])
-
-        command = build_cli_command(request)
-
-        self.assertEqual(
-            _flag_pairs(command, "--ae"), [["--ae", "ANTHROPIC_API_KEY="]]
-        )
+    def test_queue_rejects_cab_owned_extra_flag(self):
+        with pytest.raises(ValidationError, match="already supported"):
+            _request(extra_harbor_flags=["--agent=oracle"])
 
 
-class ParseEnvsTests(unittest.TestCase):
-    def test_parse_envs_accepts_single_comma_separated_string(self):
-        self.assertEqual(
-            parse_envs("FOO=bar, BAZ=qux"), {"FOO": "bar", "BAZ": "qux"}
-        )
 
-    def test_parse_envs_merges_repeatable_entries_in_order(self):
-        self.assertEqual(
-            parse_envs(["FOO=bar,BAZ=qux", "QUX=1", "FOO=override"]),
-            {"FOO": "override", "BAZ": "qux", "QUX": "1"},
-        )
-
-    def test_parse_envs_ignores_empty_input(self):
-        self.assertEqual(parse_envs(None), {})
-        self.assertEqual(parse_envs([]), {})
-        self.assertEqual(parse_envs(""), {})
-
-    def test_parse_envs_rejects_entry_without_separator(self):
-        with pytest.raises(ValueError, match="expected key=value"):
-            parse_envs(["FOO"])
+class UiTests(unittest.TestCase):
+    def test_advanced_form_has_single_extra_flags_field(self):
+        html = build_submit_form_html(["model"], ["oracle"], [], False)
+        self.assertIn("Extra Harbor Flags", html)
+        self.assertIn("extra_harbor_flags", html)
+        self.assertNotIn('id="agent_env"', html)
+        self.assertNotIn('id="agent_kwargs"', html)
+        self.assertNotIn('id="env_kwargs"', html)
+        self.assertNotIn('id="agent_timeout_multiplier"', html)
+        self.assertNotIn('id="allow_agent_host"', html)
 
 
-class ValidateKeyValueEntriesTests(unittest.TestCase):
-    def test_accepts_well_formed_entries(self):
-        validate_key_value_entries(["FOO=bar", "BAZ="], "--ae", env_keys=True)
-        validate_key_value_entries(["a.b=c,d", "x=1"], "--ek")
-
-    def test_rejects_missing_separator(self):
-        with pytest.raises(ValueError, match="Invalid --ae entry.*FOO"):
-            validate_key_value_entries(["FOO"], "--ae")
-
-    def test_rejects_empty_key(self):
-        with pytest.raises(ValueError, match="empty key"):
-            validate_key_value_entries(["=value"], "--ak")
-
-    def test_rejects_invalid_env_key_only_in_env_mode(self):
-        # kwarg keys may contain dots and dashes; env keys may not.
-        validate_key_value_entries(["a.b-c=v"], "--ek")
-        with pytest.raises(ValueError, match="variable name"):
-            validate_key_value_entries(["a.b-c=v"], "--ae", env_keys=True)
+if __name__ == "__main__":
+    unittest.main()

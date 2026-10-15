@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Header
 from fastapi.responses import HTMLResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import NamedTuple, Optional
 
 import asyncio
@@ -19,7 +19,8 @@ from coding_agent_bench.job import OpenshiftJob, _build_logged_shell_step
 from coding_agent_bench.nebius_utils import NebiusInstanceManager, RESOURCE_CONFIG_REGISTRY, get_model_max_concurrency
 from coding_agent_bench.models import ModelConfig, MODEL_REGISTRY
 from coding_agent_bench.utils import (
-    validate_key_value_entries,
+    parse_extra_harbor_lines,
+    validate_extra_harbor_flags,
     validate_remote_skill_sources,
 )
 from coding_agent_bench.providers import is_openrouter, resolve_provider, OPENROUTER_UNSUPPORTED_AGENTS
@@ -479,29 +480,9 @@ class CreateJobRequest(BaseModel):
         default_factory=list,
         description="Public Git skill sources in org/name[@ref] or HTTP(S) URL form",
     )
-    agent_env: list[str] = Field(
+    extra_harbor_flags: list[str] = Field(
         default_factory=list,
-        description="Agent environment variables in KEY=VALUE form, passed to Harbor's --ae; override agent-config values on key collision",
-    )
-    agent_kwargs: list[str] = Field(
-        default_factory=list,
-        description="Agent kwargs in key=value form, passed to Harbor's --ak; override agent-config kwargs on key collision",
-    )
-    env_kwargs: list[str] = Field(
-        default_factory=list,
-        description="Environment kwargs in key=value form, passed to Harbor's --ek",
-    )
-    harbor_envs: list[str] = Field(
-        default_factory=list,
-        description="Environment variables for the harbor process itself in KEY=VALUE form (CLI's --envs)",
-    )
-    agent_timeout_multiplier: Optional[float] = Field(
-        None,
-        description="Multiplier for the agent execution timeout (Harbor's --agent-timeout-multiplier)",
-    )
-    allow_agent_host: list[str] = Field(
-        default_factory=list,
-        description="Extra hostname or IP/CIDR entries for the agent-phase network allowlist (Harbor's --allow-agent-host)",
+        description="Extra Harbor CLI arguments, one shell-style argument fragment per line",
     )
     idempotency_key: Optional[str] = Field(
         None,
@@ -509,18 +490,14 @@ class CreateJobRequest(BaseModel):
         description="Stable key used to safely retry creation of the same job",
     )
 
-    @field_validator("agent_env", "harbor_envs")
+    @field_validator("extra_harbor_flags")
     @classmethod
-    def validate_env_var_entries(cls, values: list[str], info: ValidationInfo) -> list[str]:
-        """Require KEY=VALUE entries whose keys are valid variable names."""
-        validate_key_value_entries(values, info.field_name, env_keys=True)
-        return values
+    def validate_extra_flags(cls, values: list[str]) -> list[str]:
+        """Validate extra Harbor fragments without restricting Harbor options."""
+        from coding_agent_bench.cli import get_cab_option_names
 
-    @field_validator("agent_kwargs", "env_kwargs")
-    @classmethod
-    def validate_kwarg_entries(cls, values: list[str], info: ValidationInfo) -> list[str]:
-        """Require key=value entries for the Harbor kwarg passthroughs."""
-        validate_key_value_entries(values, info.field_name)
+        tokens = parse_extra_harbor_lines(values)
+        validate_extra_harbor_flags(tokens, get_cab_option_names())
         return values
 
 
@@ -2013,18 +1990,12 @@ def build_cli_command(req: CreateJobRequest):
             command += ["--retry-include", exc]
     for skill in req.skills:
         command += ["--skill", skill]
-    for entry in req.agent_env:
-        command += ["--ae", entry]
-    for entry in req.agent_kwargs:
-        command += ["--ak", entry]
-    for entry in req.env_kwargs:
-        command += ["--ek", entry]
-    for entry in req.harbor_envs:
-        command += ["--envs", entry]
-    if req.agent_timeout_multiplier is not None:
-        command += ["--agent-timeout-multiplier", str(req.agent_timeout_multiplier)]
-    for host in req.allow_agent_host:
-        command += ["--allow-agent-host", host]
+    if req.extra_harbor_flags:
+        from coding_agent_bench.cli import get_cab_option_names
+
+        extra_args = parse_extra_harbor_lines(req.extra_harbor_flags)
+        validate_extra_harbor_flags(extra_args, get_cab_option_names())
+        command += ["--", *extra_args]
 
     return command
 

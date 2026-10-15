@@ -47,11 +47,7 @@ class HarborCommandBuilder:
         max_retries: int = None,
         retry_include: list[str] = None,
         skills: list[str] = None,
-        agent_timeout_multiplier: float = None,
-        allow_agent_host: list[str] = None,
-        extra_agent_env: list[str] = None,
-        extra_agent_kwargs: list[str] = None,
-        extra_env_kwargs: list[str] = None,
+        extra_harbor_args: list[str] = None,
         **kwargs,
     ) -> list[str]:
         """Construct the Harbor CLI arguments for a configured benchmark run."""
@@ -84,21 +80,10 @@ class HarborCommandBuilder:
         if agent_env is not None:
             for key, value in agent_env.items():
                 args += ["--ae", f"{key}={value}"]
-        # User-supplied passthrough entries come after the config-generated
-        # values: Harbor resolves duplicate --ae keys last-wins, so these
-        # override (e.g. redirecting ANTHROPIC_BASE_URL at a gateway).
-        for entry in extra_agent_env or []:
-            args += ["--ae", entry]
-
         # Add agent kwargs
         if agent_kwargs is not None:
             for key, value in agent_kwargs.items():
                 args += ["--ak", f"{key}={value}"]
-        # After the config kwargs (and the version pin above), so a user
-        # --ak version=... or --ak reasoning_effort=... wins.
-        for entry in extra_agent_kwargs or []:
-            args += ["--ak", entry]
-
         # Add environment
         args += ["--env", environment]
         harbor_parent = os.environ.get("HARBOR_PARENT")
@@ -107,11 +92,6 @@ class HarborCommandBuilder:
                 "--ek",
                 f"persistent_env={json.dumps({'HARBOR_PARENT': harbor_parent})}",
             ]
-        # User-supplied environment kwargs come last; a user
-        # --ek persistent_env=... deliberately overrides the generated one.
-        for entry in extra_env_kwargs or []:
-            args += ["--ek", entry]
-
         # Add mounts
         if mounts is not None:
             args += ["--mounts-json", json.dumps(mounts)]
@@ -140,14 +120,8 @@ class HarborCommandBuilder:
         for exc in includes:
             args += ["--retry-include", exc]
 
-        # Add agent execution timeout multiplier
-        if agent_timeout_multiplier is not None:
-            args += ["--agent-timeout-multiplier", str(agent_timeout_multiplier)]
-
-        # Extend the task's agent-phase network allowlist (e.g. for a model
-        # server host not already covered by the task's allowed_hosts).
-        for host in allow_agent_host or []:
-            args += ["--allow-agent-host", host]
+        # Append arbitrary Harbor arguments after generated configuration.
+        args += extra_harbor_args or []
 
         # Execute the job
         cmd = ["harbor", "run", "--debug", *args]
@@ -174,11 +148,7 @@ class HarborCommandBuilder:
         max_retries: int = None,
         retry_include: list[str] = None,
         skills: list[str] = None,
-        agent_timeout_multiplier: float = None,
-        allow_agent_host: list[str] = None,
-        extra_agent_env: list[str] = None,
-        extra_agent_kwargs: list[str] = None,
-        extra_env_kwargs: list[str] = None,
+        extra_harbor_args: list[str] = None,
         **kwargs,
     ) -> tuple[list[str], Path]:
         """
@@ -223,11 +193,7 @@ class HarborCommandBuilder:
             max_retries=max_retries,
             retry_include=retry_include,
             skills=skills,
-            agent_timeout_multiplier=agent_timeout_multiplier,
-            allow_agent_host=allow_agent_host,
-            extra_agent_env=extra_agent_env,
-            extra_agent_kwargs=extra_agent_kwargs,
-            extra_env_kwargs=extra_env_kwargs,
+            extra_harbor_args=extra_harbor_args,
         )
 
         job_path = self.jobs_dir / job_name

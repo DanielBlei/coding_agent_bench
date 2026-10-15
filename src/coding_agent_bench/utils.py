@@ -7,6 +7,26 @@ from harbor.skills import resolve_repo_source
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_STORAGE_ENDPOINT_URL = "http://harbor-storage:9000"
+# Keep policy explicit and small. Harbor options are otherwise forwarded
+# dynamically; add a flag name here only when CAB must prevent passthrough.
+BLOCKED_HARBOR_FLAGS: frozenset[str] = frozenset(
+    {
+        # CAB owns these Harbor options because they determine orchestration,
+        # model selection, task input, result storage, and job plugins.
+        "--env",
+        "-e",
+        "--model",
+        "-m",
+        "--path",
+        "-p",
+        "--dataset",
+        "-d",
+        "--mounts-json",
+        "--plugin",
+        "--jobs-dir",
+        "-o",
+    }
+)
 
 
 def storage_endpoint_url() -> str:
@@ -72,24 +92,39 @@ def parse_envs(envs: str | list[str] | None) -> dict[str, str]:
     return parsed
 
 
-def validate_key_value_entries(
-    entries: list[str] | None, flag: str, *, env_keys: bool = False
-) -> None:
-    """Validate repeatable KEY=VALUE passthrough entries for a CLI flag.
+def parse_extra_harbor_lines(lines: list[str] | None) -> list[str]:
+    """Split frontend/API Harbor flag lines into command-line tokens."""
+    tokens: list[str] = []
+    for line in lines or []:
+        try:
+            tokens.extend(shlex.split(line))
+        except ValueError as exc:
+            raise ValueError(f"Invalid extra Harbor flags line {line!r}: {exc}") from exc
+    return tokens
 
-    Values are passed to Harbor verbatim; only the key side is checked. Empty
-    values (`KEY=`) are legal. With `env_keys=True` the key must also be a valid
-    environment variable name.
-    """
-    for entry in entries or []:
-        if "=" not in entry:
-            raise ValueError(f"Invalid {flag} entry (expected key=value): {entry!r}")
-        key = entry.split("=", 1)[0].strip()
-        if not key:
-            raise ValueError(f"Invalid {flag} entry (empty key): {entry!r}")
-        if env_keys and not _ENV_KEY_RE.match(key):
+
+def harbor_flag_name(token: str) -> str | None:
+    """Return an option's name, excluding an optional ``=value`` suffix."""
+    if not token.startswith("-") or token == "-":
+        return None
+    if token.startswith("--"):
+        return token.split("=", 1)[0]
+    return token[:2]
+
+
+def validate_extra_harbor_flags(
+    tokens: list[str], cab_flags: set[str] | frozenset[str]
+) -> None:
+    """Reject blocked Harbor flags and duplicate CAB-owned options."""
+    for token in tokens:
+        flag = harbor_flag_name(token)
+        if flag is None:
+            continue
+        if flag in BLOCKED_HARBOR_FLAGS:
+            raise ValueError(f"Harbor flag {flag!r} is blocked from passthrough")
+        if flag in cab_flags:
             raise ValueError(
-                f"Invalid {flag} entry (variable name must match [A-Za-z_][A-Za-z0-9_]*): {entry!r}"
+                f"Harbor flag {flag!r} is already supported by coding-agent-bench"
             )
 
 
