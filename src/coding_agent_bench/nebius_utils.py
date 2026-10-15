@@ -7,7 +7,6 @@ import os
 import re
 import shlex
 import tempfile
-from typing import Optional
 
 from coding_agent_bench.models import (
     get_model_config,
@@ -211,42 +210,33 @@ class NebiusInstanceManager:
         return stdout
 
     async def create_profile(self, name: str, credentials_path: Path):
-        """Create a new service account profile."""
-        # List available profiles
-        args = ["profile", "list"]
-        stdout = await self.exec(args)
-        profiles = [line.replace(" [default]", "") for line in stdout.splitlines()]
+        """Create a profile or refresh credentials for an existing one."""
+        create_args = [
+            "profile", "create",
+            "--endpoint", "api.nebius.cloud",
+            "--parent-id", self._parent_id,
+            "--tenant-id", self._tenant_id,
+            "--service-account-file", str(credentials_path),
+            "--profile", name,
+        ]
+        try:
+            # Creating the first profile initializes ~/.nebius/config.yaml.
+            # Do this before any profile-list command: on a fresh pod that
+            # config file does not exist yet.
+            return await self.exec(create_args)
+        except Exception as exc:
+            if "already exists" not in str(exc).lower():
+                raise
 
-        if name not in profiles:
-            try:
-                args = [
-                    "profile", "create",
-                    "--endpoint", "api.nebius.cloud",
-                    "--parent-id", self._parent_id,
-                    "--tenant-id", self._tenant_id,
-                    "--service-account-file", str(credentials_path),
-                    "--profile", name,
-                ]
-                return await self.exec(args)
-            except Exception as e:
-                if "already exists" in str(e):
-                    logger.info("Profile already exists. Skipping creation.")
-                    return None
-                else:
-                    raise e
-        else:
-            try:
-                args = [
-                    "profile", "update", name,
-                    "--endpoint", "api.nebius.cloud",
-                    "--parent-id", self._parent_id,
-                    "--tenant-id", self._tenant_id,
-                    "--service-account-file", str(credentials_path),
-                ]
-                return await self.exec(args)
-            except Exception as e:
-                logger.error("Failed to update profile.")
-                raise e
+        logger.info("Nebius profile already exists; updating its credentials")
+        update_args = [
+            "profile", "update", name,
+            "--endpoint", "api.nebius.cloud",
+            "--parent-id", self._parent_id,
+            "--tenant-id", self._tenant_id,
+            "--service-account-file", str(credentials_path),
+        ]
+        return await self.exec(update_args)
 
     async def activate_profile(self, name: str):
         """Activate a profile."""
