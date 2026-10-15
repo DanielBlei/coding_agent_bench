@@ -3,6 +3,9 @@
 import json
 import html
 
+from coding_agent_bench.models import MODEL_REGISTRY
+from coding_agent_bench.nebius_utils import RESOURCE_CONFIGS
+
 NEBIUS_PREFIX = "nebius-"
 
 
@@ -19,6 +22,7 @@ def build_submit_form_html(
 
     # Define optional/advanced fields
     advanced_fields = _build_advanced_fields_html(nebius_configs, nebius_enabled)
+    validation_table = _build_model_gpu_validation_table_html()
 
     return f"""
 <div id="submit-job-section" style="margin-bottom: 2rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; background: #fafafa;">
@@ -50,6 +54,8 @@ def build_submit_form_html(
             </button>
             <span id="submit-status" style="margin-left: 1rem; font-style: italic;"></span>
         </div>
+
+        {validation_table}
     </form>
 </div>
 
@@ -465,4 +471,39 @@ def _build_advanced_fields_html(
                        placeholder="Read-only access to this repository">
             </div>
         </div>
-"""
+    """
+
+
+def _build_model_gpu_validation_table_html() -> str:
+    """Build a table showing validated model/GPU concurrency combinations."""
+    gpu_configs = list(RESOURCE_CONFIGS)
+    header_cells = "".join(
+        f'<th scope="col">{html.escape(config.name)}</th>' for config in gpu_configs
+    )
+
+    rows = []
+    for model_name, model_config in MODEL_REGISTRY.items():
+        cells = []
+        for gpu_config in gpu_configs:
+            concurrency = gpu_config.model_concurrency.get(model_config.name)
+            value = str(concurrency) if concurrency is not None else "&mdash;"
+            cells.append(f'<td style="text-align: center;">{value}</td>')
+        rows.append(
+            f'<tr><th scope="row">{html.escape(model_name)}</th>{"".join(cells)}</tr>'
+        )
+
+    if not rows:
+        return ""
+
+    return f"""
+        <div style="margin-top: 1.5rem;">
+            <h3 style="margin-bottom: 0.25rem;">Validated Model/GPU Configurations</h3>
+            <small style="color: #666;">Maximum validated concurrent tasks. A dash means this model/GPU combination has not been validated.</small>
+            <div style="overflow-x: auto; margin-top: 0.5rem;">
+                <table style="min-width: max-content; margin-bottom: 0;">
+                    <thead><tr><th scope="col">Model</th>{header_cells}</tr></thead>
+                    <tbody>{"".join(rows)}</tbody>
+                </table>
+            </div>
+        </div>
+    """
