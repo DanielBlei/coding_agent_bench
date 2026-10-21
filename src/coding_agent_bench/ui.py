@@ -141,6 +141,10 @@ function validateForm() {{
     if (modelMaxLen && (isNaN(modelMaxLen) || parseInt(modelMaxLen) < 1)) {{
         errors.push('model_max_len must be a positive integer');
     }}
+    const maxRetries = document.getElementById('max_retries').value.trim();
+    if (maxRetries && (isNaN(maxRetries) || parseInt(maxRetries) < 0)) {{
+        errors.push('max_retries must be a non-negative integer');
+    }}
 
     if (errors.length > 0) {{
         alert('Validation errors:\\n' + errors.join('\\n'));
@@ -159,6 +163,22 @@ function updateJobName() {{
     const agent = document.getElementById('agent').value;
     const jobName = [modelName, dataset, agent].map(sanitizeJobNamePart).join('-');
     document.getElementById('job_name').value = jobName;
+}}
+
+function parseKeyValueLines(fieldId) {{
+    // Values may themselves contain commas (e.g. JSON), so only newlines separate entries.
+    return document.getElementById(fieldId).value
+        .split(/\\r?\\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+}}
+
+function parseListField(fieldId) {{
+    // Hosts and error-type names never contain commas, so accept both separators.
+    return document.getElementById(fieldId).value
+        .split(/[\\n,]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
 }}
 
 async function submitJob(event) {{
@@ -236,6 +256,23 @@ async function submitJob(event) {{
         const agentVersion = document.getElementById('agent_version').value.trim();
         if (agentVersion) formData.agent_version = agentVersion;
 
+    const skills = document.getElementById('skills').value
+        .split(',')
+        .map((skill) => skill.trim())
+        .filter(Boolean);
+    if (skills.length) formData.skills = skills;
+
+    const extraHarborFlags = parseKeyValueLines('extra_harbor_flags');
+    if (extraHarborFlags.length) formData.extra_harbor_flags = extraHarborFlags;
+
+    const retryInclude = parseListField('retry_include');
+    if (retryInclude.length) formData.retry_include = retryInclude;
+
+    const maxRetries = document.getElementById('max_retries').value.trim();
+    if (maxRetries !== '') formData.max_retries = parseInt(maxRetries);
+
+    try {{
+        const apiKey = localStorage.getItem('coding_agent_bench_api_key');
         const response = await fetch('/jobs', {{
             method: 'POST',
             headers,
@@ -442,6 +479,26 @@ def _build_advanced_fields_html(
             <textarea id="before_script" name="before_script" rows="3"
                       style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
                       placeholder="Commands to run before execution..."></textarea>
+        </div>
+        <div>
+            <label for="max_retries" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Max Retries</label>
+            <input type="number" id="max_retries" name="max_retries" min="0"
+                   style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"
+                   placeholder="Leave empty for default (1)">
+        </div>
+        <div>
+            <label for="retry_include" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Retry Error Types</label>
+            <textarea id="retry_include" name="retry_include" rows="2"
+                      style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
+                      placeholder="One per line or comma-separated, e.g. AgentTimeoutError"></textarea>
+            <small style="color: #666;">Error types to retry (Harbor's --retry-include). Leave empty for defaults.</small>
+        </div>
+        <div style="grid-column: 1 / -1;">
+            <label for="extra_harbor_flags" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Extra Harbor Flags</label>
+            <textarea id="extra_harbor_flags" name="extra_harbor_flags" rows="5"
+                      style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: monospace;"
+                      placeholder="One Harbor argument or shell-style fragment per line, e.g.&#10;--agent-timeout-multiplier=2&#10;--ae 'CLAUDE_CODE_USE_VERTEX=1'&#10;--some-future-harbor-flag"></textarea>
+            <small style="color: #666;">Appended to the final Harbor command. Use --flag=value when possible; CAB-owned or blocked flags are rejected.</small>
         </div>
         <div id="github-dataset-fields" style="grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 1rem; border: 1px solid #ddd; border-radius: 6px; background: #f7f9fc; box-sizing: border-box;">
             <div style="grid-column: 1 / -1;">
