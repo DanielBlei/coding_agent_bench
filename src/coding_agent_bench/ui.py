@@ -142,7 +142,8 @@ function validateForm() {{
         errors.push('model_max_len must be a positive integer');
     }}
     const maxRetries = document.getElementById('max_retries').value.trim();
-    if (maxRetries && (isNaN(maxRetries) || parseInt(maxRetries) < 0)) {{
+    const parsedMaxRetries = Number(maxRetries);
+    if (maxRetries && (!Number.isInteger(parsedMaxRetries) || parsedMaxRetries < 0)) {{
         errors.push('max_retries must be a non-negative integer');
     }}
 
@@ -267,7 +268,7 @@ async function submitJob(event) {{
         if (retryInclude.length) formData.retry_include = retryInclude;
 
         const maxRetries = document.getElementById('max_retries').value.trim();
-        if (maxRetries !== '') formData.max_retries = parseInt(maxRetries);
+        if (maxRetries !== '') formData.max_retries = Number(maxRetries);
 
         const response = await fetch('/jobs', {{
             method: 'POST',
