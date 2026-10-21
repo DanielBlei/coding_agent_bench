@@ -157,12 +157,17 @@ function sanitizeJobNamePart(value) {{
     return value.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
 }}
 
+let jobNameManuallyEdited = false;
+
 function updateJobName() {{
+    const jobNameInput = document.getElementById('job_name');
+    if (jobNameManuallyEdited && jobNameInput.value.trim()) return;
+
     const modelName = document.getElementById('model_name').value;
     const dataset = document.getElementById('dataset').value.trim();
     const agent = document.getElementById('agent').value;
     const jobName = [modelName, dataset, agent].map(sanitizeJobNamePart).join('-');
-    document.getElementById('job_name').value = jobName;
+    jobNameInput.value = jobName;
 }}
 
 function parseKeyValueLines(fieldId) {{
@@ -265,8 +270,6 @@ async function submitJob(event) {{
     const maxRetries = document.getElementById('max_retries').value.trim();
     if (maxRetries !== '') formData.max_retries = parseInt(maxRetries);
 
-    try {{
-        const apiKey = localStorage.getItem('coding_agent_bench_api_key');
         const response = await fetch('/jobs', {{
             method: 'POST',
             headers,
@@ -356,6 +359,9 @@ document.getElementById('server_url').addEventListener('change', startMaxConcurr
 document.getElementById('model_name').addEventListener('change', updateJobName);
 document.getElementById('agent').addEventListener('change', updateJobName);
 document.getElementById('dataset').addEventListener('input', updateJobName);
+document.getElementById('job_name').addEventListener('input', () => {{
+    jobNameManuallyEdited = true;
+}});
 
 updateJobName();
 checkApiKey();
@@ -390,7 +396,7 @@ def _build_basic_fields_html(
     return f"""
         <div>
             <label for="job_name" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Job Name</label>
-            <input type="text" id="job_name" name="job_name" readonly
+            <input type="text" id="job_name" name="job_name"
                    style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"
                    placeholder="Generated from model, benchmark, and agent">
         </div>
