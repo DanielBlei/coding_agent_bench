@@ -256,12 +256,6 @@ async function submitJob(event) {{
         const agentVersion = document.getElementById('agent_version').value.trim();
         if (agentVersion) formData.agent_version = agentVersion;
 
-    const skills = document.getElementById('skills').value
-        .split(',')
-        .map((skill) => skill.trim())
-        .filter(Boolean);
-    if (skills.length) formData.skills = skills;
-
     const extraHarborFlags = parseKeyValueLines('extra_harbor_flags');
     if (extraHarborFlags.length) formData.extra_harbor_flags = extraHarborFlags;
 
