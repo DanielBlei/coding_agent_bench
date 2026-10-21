@@ -700,6 +700,21 @@ def test_ui_submits_directly_without_archive_staging():
     assert html.index("const formData = {") < html.index("if (skills.length) formData.skills = skills;")
 
 
+def test_github_submission_names_are_unique_and_token_is_trimmed():
+    html = build_submit_form_html(["model"], ["oracle"], [], False)
+    submit_job = html.split("async function submitJob(event) {", 1)[1].split(
+        "function checkApiKey()", 1
+    )[0]
+
+    assert "`${githubRepository.owner}-${githubRepository.repo}`" in html
+    assert "document.getElementById('github_repo').addEventListener('input', updateJobName);" in html
+    assert "const githubToken = githubTokenInput.value.trim();" in submit_job
+    assert "if (githubToken) headers['X-GitHub-Token'] = githubToken;" in submit_job
+    assert submit_job.count("try {") == 1
+    assert submit_job.count("} catch (err) {") == 1
+    assert submit_job.count("} finally {") == 1
+
+
 def test_paused_private_github_job_ui_requests_fresh_token(client):
     job_id = submit(client).json()["job_id"]
     api.job_store.pin_github_dataset(job_id, source(commit=COMMIT))
