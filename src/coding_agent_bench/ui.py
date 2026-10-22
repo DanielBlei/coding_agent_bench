@@ -105,10 +105,12 @@ function validateForm() {{
     const githubRepo = document.getElementById('github_repo').value.trim();
     const modelName = document.getElementById('model_name').value;
     const serverUrl = document.getElementById('server_url').value.trim();
+    const jobName = document.getElementById('job_name').value.trim();
 
     if (!agent) errors.push('Agent is required');
     if (!dataset && !githubRepo) errors.push('Enter a Harbor dataset or GitHub repository');
     if (githubRepo && !parseGitHubRepository(githubRepo)) errors.push('GitHub repository must be owner/repo or an HTTPS URL like https://github.com/owner/repo');
+    if (!isPathSafeJobName(jobName)) errors.push('Job name must contain only letters, numbers, underscores, and hyphens');
     if (!modelName) errors.push('Model name is required');
     if (!serverUrl) errors.push('Server URL is required');
 
@@ -157,6 +159,18 @@ function sanitizeJobNamePart(value) {{
     return value.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
 }}
 
+function isPathSafeJobName(value) {{
+    return /^[a-zA-Z0-9_-]+$/.test(value);
+}}
+
+function updateJobNameWarning() {{
+    const jobName = document.getElementById('job_name').value.trim();
+    const warning = document.getElementById('job-name-warning');
+    warning.textContent = jobName && !isPathSafeJobName(jobName)
+        ? 'Job name must contain only letters, numbers, underscores, and hyphens.'
+        : '';
+}}
+
 let jobNameManuallyEdited = false;
 
 function updateJobName() {{
@@ -168,6 +182,7 @@ function updateJobName() {{
     const agent = document.getElementById('agent').value;
     const jobName = [modelName, dataset, agent].map(sanitizeJobNamePart).join('-');
     jobNameInput.value = jobName;
+    updateJobNameWarning();
 }}
 
 function parseKeyValueLines(fieldId) {{
@@ -361,6 +376,7 @@ document.getElementById('agent').addEventListener('change', updateJobName);
 document.getElementById('dataset').addEventListener('input', updateJobName);
 document.getElementById('job_name').addEventListener('input', () => {{
     jobNameManuallyEdited = true;
+    updateJobNameWarning();
 }});
 
 updateJobName();
@@ -399,6 +415,7 @@ def _build_basic_fields_html(
             <input type="text" id="job_name" name="job_name"
                    style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"
                    placeholder="Generated from model, benchmark, and agent">
+            <small id="job-name-warning" style="display: block; color: #cc6600; margin-top: 0.25rem;"></small>
         </div>
         <div>
             <label for="agent" style="display: block; font-weight: bold; margin-bottom: 0.25rem;">Agent *</label>
