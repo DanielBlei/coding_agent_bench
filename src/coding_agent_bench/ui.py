@@ -144,7 +144,8 @@ function validateForm() {{
         errors.push('model_max_len must be a positive integer');
     }}
     const maxRetries = document.getElementById('max_retries').value.trim();
-    if (maxRetries && (isNaN(maxRetries) || parseInt(maxRetries) < 0)) {{
+    const parsedMaxRetries = Number(maxRetries);
+    if (maxRetries && (!Number.isInteger(parsedMaxRetries) || parsedMaxRetries < 0)) {{
         errors.push('max_retries must be a non-negative integer');
     }}
 
@@ -178,7 +179,10 @@ function updateJobName() {{
     if (jobNameManuallyEdited && jobNameInput.value.trim()) return;
 
     const modelName = document.getElementById('model_name').value;
-    const dataset = document.getElementById('dataset').value.trim();
+    const githubRepository = parseGitHubRepository(document.getElementById('github_repo').value || '');
+    const dataset = githubRepository
+        ? `${{githubRepository.owner}}-${{githubRepository.repo}}`
+        : document.getElementById('dataset').value.trim();
     const agent = document.getElementById('agent').value;
     const jobName = [modelName, dataset, agent].map(sanitizeJobNamePart).join('-');
     jobNameInput.value = jobName;
@@ -234,7 +238,8 @@ async function submitJob(event) {{
 
         if (githubRepository) {{
             dataset = `github.com/${{githubRepository.owner}}/${{githubRepository.repo}}${{githubRef ? `@${{githubRef}}` : ''}}`;
-            if (githubTokenInput.value) headers['X-GitHub-Token'] = githubTokenInput.value;
+            const githubToken = githubTokenInput.value.trim();
+            if (githubToken) headers['X-GitHub-Token'] = githubToken;
         }}
         githubTokenInput.value = '';
         headers['X-API-Key'] = apiKey;
@@ -276,14 +281,14 @@ async function submitJob(event) {{
         const agentVersion = document.getElementById('agent_version').value.trim();
         if (agentVersion) formData.agent_version = agentVersion;
 
-    const extraHarborFlags = parseKeyValueLines('extra_harbor_flags');
-    if (extraHarborFlags.length) formData.extra_harbor_flags = extraHarborFlags;
+        const extraHarborFlags = parseKeyValueLines('extra_harbor_flags');
+        if (extraHarborFlags.length) formData.extra_harbor_flags = extraHarborFlags;
 
-    const retryInclude = parseListField('retry_include');
-    if (retryInclude.length) formData.retry_include = retryInclude;
+        const retryInclude = parseListField('retry_include');
+        if (retryInclude.length) formData.retry_include = retryInclude;
 
-    const maxRetries = document.getElementById('max_retries').value.trim();
-    if (maxRetries !== '') formData.max_retries = parseInt(maxRetries);
+        const maxRetries = document.getElementById('max_retries').value.trim();
+        if (maxRetries !== '') formData.max_retries = Number(maxRetries);
 
         const response = await fetch('/jobs', {{
             method: 'POST',
@@ -374,6 +379,7 @@ document.getElementById('server_url').addEventListener('change', startMaxConcurr
 document.getElementById('model_name').addEventListener('change', updateJobName);
 document.getElementById('agent').addEventListener('change', updateJobName);
 document.getElementById('dataset').addEventListener('input', updateJobName);
+document.getElementById('github_repo').addEventListener('input', updateJobName);
 document.getElementById('job_name').addEventListener('input', () => {{
     jobNameManuallyEdited = true;
     updateJobNameWarning();
